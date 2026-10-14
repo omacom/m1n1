@@ -160,7 +160,15 @@ int isp_init(void)
                 case V14_7:
                     heap_top = 0x1000000;
                     break;
+                case V26_6_2:
+                    // J613: the firmware segments end at 0xdf0000; the
+                    // camera streams with the 14.7 heap top.
+                    if (ver_rev != ISP_VER_T8122)
+                        goto unsupported;
+                    heap_top = 0x1000000;
+                    break;
                 default:
+                unsupported:
                     printf("isp: unsupported firmware\n");
                     return -1;
             }
@@ -177,6 +185,10 @@ int isp_init(void)
     unsigned int count = segments_len / sizeof(*seg);
 
     heap_iova = seg[count - 1].iova + seg[count - 1].size;
+    if (heap_iova >= heap_top) {
+        printf("isp: firmware ends at 0x%lx, above heap top 0x%lx\n", heap_iova, heap_top);
+        return -1;
+    }
     heap_size = heap_top - heap_iova;
     heap_phys = top_of_memory_alloc(heap_size);
 
