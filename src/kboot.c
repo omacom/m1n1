@@ -6466,7 +6466,9 @@ int kboot_prepare_dt(void *fdt)
             image_end < (u64)_base || image_end > ram_end)
             bail("FDT: invalid T8103 inherited memory extent\n");
     }
-    if (chip_id == T8140) {
+    /* T6050 hands its live NVMe session to Linux the same way: retain the heap it allocated from.
+     */
+    if (chip_id == T8140 || chip_id == T6050) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();
 

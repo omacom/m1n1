@@ -133,6 +133,8 @@ static bool nvme_initialized = false;
 static bool nvme_reboot_required;
 bool nvme_adopt_live_session = false;
 bool nvme_keep_running_for_linux = false;
+bool nvme_t6050_stop_coproc =
+    false; /* T6050: stop the coprocessor at shutdown (it does not restart) */
 static u8 nvme_die;
 
 static asc_dev_t *nvme_asc = NULL;
@@ -411,6 +413,10 @@ bool nvme_init(void)
          */
         if (chip_id == T8140 && nvmmu_base == 0x38dcc0000 &&
             nvme_base == 0x3cdcc0000 && nvme_size == 0x10000)
+            nvme_size = 0x30000;
+        /* The J714c (T6050) ADT has the same 64 KiB alias; same registers above it. */
+        if (chip_id == T6050 && nvmmu_base == 0x41dcc0000 && nvme_base == 0x45dcc0000 &&
+            nvme_size == 0x10000)
             nvme_size = 0x30000;
         if (nvmmu_size < NVMMU_TCB_STAT + sizeof(u32) ||
             nvme_size < NVME_DB_LINEAR_IOSQ + sizeof(u32) || nvmmu_base > UINT64_MAX - nvmmu_size ||
@@ -711,6 +717,24 @@ bool nvme_shutdown(void)
         printf("nvme: timeout while waiting for CSTS.RDY to clear\n");
         if (nvme_type == NVME_T8132)
             goto out_preserve;
+    }
+
+    if (nvme_type == NVME_T8132 && chip_id == T6050 && nvme_t6050_stop_coproc) {
+        /*
+         * T6050: stop the coprocessor cleanly and leave its firmware resident.
+         * Linux sets RUN again and runs a fresh RTKit boot. No PMGR reset here.
+         */
+        write64_lo_hi(nvme_base + NVME_IOQ_CMDS, 0);
+        write64_lo_hi(nvme_base + NVME_IOQ_CQES, 0);
+        rtkit_sleep(nvme_rtkit);
+        rtkit_free(nvme_rtkit);
+        sart_free(nvme_sart);
+        asc_free(nvme_asc);
+        free_queue(&ioq);
+        free_queue(&adminq);
+        nvme_initialized = false;
+        printf("nvme: shutdown done, coprocessor stopped\n");
+        return true;
     }
 
     if (nvme_type == NVME_T8132) {
