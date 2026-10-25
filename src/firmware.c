@@ -212,6 +212,8 @@ const struct fw_version_info fw_versions[NUM_FW_VERSIONS] = {
     [V26_6_2]    = {V26_6_2,    "26.6.2",      {26, 6, 2},     3, "mBoot-18000.161.10"},
     [V26_7]      = {V26_7,      "26.7",        {26, 7, 0},     3, "mBoot-18000.161.10.701.1"},
     [V26_7_1]    = {V26_7_1,    "26.7.1",      {26, 7, 1},     3, "mBoot-18000.161.10.702.1"},
+    // Same iBoot string as 27.0: detect_firmware() always picks V27_0. Verified from the J575D
+    // (M3 Ultra) 27.0.1 iBoot (26A434): both report "mBoot-20457.1.29", so no V27_0_1 exists.
     [V27_0]      = {V27_0,      "27.0",        {27, 0, 0},     3, "mBoot-20457.1.29"},
     // clang-format on
 };

@@ -3079,6 +3079,18 @@ int dt_set_gpu(void *dt)
             return dt_set_gpu_g15(dt, &g15_soc_t6030);
         case T6031:
             return dt_set_gpu_t6031(dt);
+        case T6032:
+            /*
+             * T6032 (J575D): refused until the firmware ABI exists. Missing pieces, each one a
+             * flip-plus-table-row after this is in place: the loaded G15-family image identity
+             * (a T6032 row in firmware.c's gfx_fw_images[]) and a GPU setup with the T6032
+             * topology (the 27.0.1 ADT names gpu,t6032 in /arm-io/sgx) armed by its opt-in.
+             */
+            printf("FDT: GPU: T6032: handoff refused: no known T6032 gfx firmware image/ABI for "
+                   "OS firmware %s exists yet; add its identity to gfx_fw_images and a T6032 GPU "
+                   "setup, then opt in\n",
+                   os_firmware.string);
+            return 0;
         case T8122: {
             int dcp = fdt_path_offset(dt, "dcp"), len;
             const fdt32_t *profile = dcp < 0 ? NULL :

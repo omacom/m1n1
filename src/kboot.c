@@ -5142,6 +5142,19 @@ static int dt_set_display(void)
         if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))
             dt_reserve_dcpext_firmware(false);
         return ret;
+    } else if (!fdt_node_check_compatible(dt, 0, "apple,t6032")) {
+        /*
+         * T6032 (J575D): refused until the handoff's firmware ABI exists. The missing pieces:
+         * a dcp6 display-gate profile for T6032 pinned to this OS firmware (27.0/27.0.1,
+         * mBoot-20457.1.29) in kboot_display_handoff.c, and a kernel side T6032 ABI; the 27.0.1
+         * ADT also has no dcp/disp0 processor at all (the Studio's displays are dcpext0..7), so
+         * the T6031 profile cannot be reused as is. Nothing is enabled by default.
+         */
+        printf("FDT: T6032: display handoff refused: no T6032 dcp6 display-gate profile for this "
+               "OS firmware (%s) or kernel ABI exists yet; the ADT also has no dcp/disp0 "
+               "(displays are dcpext0..7)\n",
+               os_firmware.string);
+        return 0;
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t8142")) {
         ret = dt_carveout_reserved_regions("dcp", "disp0", "disp0_piodma",
                                           disp_reserved_regions_t8142,
@@ -5368,7 +5381,10 @@ static int dt_set_pmp_t6030(void)
     return 0;
 }
 
-/* T6031: on every boot of a J514C or J516C; the PMP and its DART are where the kernel puts them */
+/* T6031: on every boot of a J514C or J516C; the PMP and its DART are where the kernel puts them.
+ * There is no T6032 entry: the J575D 27.0.1 ADT has neither /arm-io/pmp nor /arm-io/dart-pmp,
+ * so there are no PMP values to pass (dt_pass_pmp() would refuse them anyway).
+ */
 static const struct pmp_values_soc pmp_values_t6031 = {
     "apple,t6031", "asahi,t6031-pmp", "T6031", {1181, 1180, 1183, 1182}, 0x290300000, 0x4000,
 };
@@ -6208,6 +6224,9 @@ int kboot_prepare_dt(void *fdt)
     // A T6031 takes its PMP values (32K) and its display, GPU and firmware handoff (about 16K)
     if (chip_id == T6031)
         dt_bufsize += 4 * SZ_16K;
+    // A T6032 takes only its firmware image UUID list (about 16K)
+    if (chip_id == T6032)
+        dt_bufsize += SZ_16K;
     dt = memalign(DT_ALIGN, dt_bufsize);
 
     if (fdt_open_into(fdt, dt, dt_bufsize) < 0)
@@ -6403,11 +6422,15 @@ int kboot_prepare_dt(void *fdt)
     if (chip_id == T6030)
         dt_display_facts_t6030(dt);
 
-    /* T6031 (J514C/J516C): this Mac's PMP values and firmware image UUIDs, in their own room. */
+    /* T6031 (J514C/J516C): this Mac's PMP values and firmware image UUIDs, in their own room.
+     * T6032 (J575D): the UUID list only (its 27.0.1 ADT has no PMP and no disp0 clock facts).
+     */
     if (chip_id == T6031) {
         dt_set_pmp_t6031();
         dt_t6031_fw_uuids(dt);
         dt_t6031_facts(dt);
+    } else if (chip_id == T6032) {
+        dt_t6031_fw_uuids(dt);
     }
 
     /* T8140 PCIe status is known only after pcie_init() in kboot_boot(). */
