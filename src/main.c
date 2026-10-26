@@ -335,7 +335,12 @@ next_stage:
 #ifndef BRINGUP
     if (chip_id != T8152) {
         usb_iodev_shutdown();
+#ifdef T6050_NO_HOST_PREP
+        /* Test build: the kernel's apple,t6050-usb2-phy does the port setup alone. */
+        printf("T6050 host prep skipped\n");
+#else
         usb_t6050_host_prep();
+#endif
         /* Its firmware may still use memory the next stage will reuse. */
         if (display_shutdown(DCP_SLEEP_IF_EXTERNAL) < 0) {
             printf("Display handoff failed; returning to proxy\n");
