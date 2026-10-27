@@ -262,7 +262,8 @@ def run(build, chainloading, mode, payload, compat=J613, calloc_fail=-1):
     forwarded = out / "forwarded.txt"
     forwarded.write_bytes(b"")
     r = subprocess.run([str(binaries[chainloading]), mode, str(path), compat, str(forwarded),
-                        str(calloc_fail)], capture_output=True, text=True, check=True)
+                        str(calloc_fail)], capture_output=True, text=True,
+                       errors="backslashreplace", check=True)
     return Run(r.stdout), forwarded.read_bytes()
 
 
