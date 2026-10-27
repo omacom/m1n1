@@ -179,41 +179,86 @@ static void *load_kernel(void *p, size_t size)
 #define IS_VAR(x) !strncmp((char *)*p, x, strlen(x))
 
 #define MAX_CHOSEN_VARS 16
+/* Passed after every other line to a chainloaded stage when a config line was lost */
+#define CONFIG_LOST_VAR "m1n1.config-lost=1"
 
+/* The two extra slots carry CONFIG_LOST_VAR and nvme.adopt without reducing the chosen limit. */
 #ifdef CHAINLOADING
 static size_t chosen_cnt = 1;
-/* The extra slot carries nvme.adopt without reducing the chosen-variable limit. */
-static char *chosen[MAX_CHOSEN_VARS + 1] = {
+static char *chosen[MAX_CHOSEN_VARS + 2] = {
     "chosen.asahi,m1n1-stage1-version=" BUILD_TAG,
 };
 #else
 static size_t chosen_cnt = 0;
-static char *chosen[MAX_CHOSEN_VARS + 1];
+static char *chosen[MAX_CHOSEN_VARS + 2];
 #endif
 
 static bool enable_tso = false;
+
+/*
+ * A config line that cannot be kept or read: a chosen. line past the end of chosen[]; a line of a
+ * variable m1n1 knows that has no newline or a name or value too long (the scan stops there), or
+ * that a line without '=' took into its name; or a stop at unknown data after the kernel or a
+ * config line, before config that may follow. A chainloading stage 1 that lost one says so with
+ * CONFIG_LOST_VAR. The value the config set before the lost line still stands, an owner's
+ * chosen.<switch>=1 against a lost =0 perhaps, so on the Macs with M3 graphics defaults kboot
+ * then hands no graphics over (kboot_set_config_lost()). Everything else boots as before.
+ */
+static bool config_lost = false;
+static bool config_seen = false;
+static bool config_lost_passed = false;
+
+static const char *const config_names[] = {
+    "chosen.",  "chainload=",   "boot=", "nvme.adopt=",
+    "display=", "mitigations=", "tso=",  "m1n1.config-lost="};
+
+/* The start of a line of a variable m1n1 knows */
+static bool config_line(const char *s)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(config_names); i++)
+        if (!strncmp(s, config_names[i], strlen(config_names[i])))
+            return true;
+    return false;
+}
+
+/* check_var() cannot read this line: lost if it is one of m1n1's */
+static bool config_unreadable(u8 *p)
+{
+    if (config_line((char *)p))
+        config_lost = true;
+    return false;
+}
 
 static bool check_var(u8 **p)
 {
     char *val = memchr(*p, '=', strnlen((char *)*p, MAX_VAR_NAME + 1));
     if (!val)
-        return false;
+        return config_unreadable(*p);
+    /* A line without '=' took the lines after it into this name */
+    for (char *nl = memchr(*p, '\n', val - (char *)*p); nl; nl = memchr(nl + 1, '\n', val - nl - 1))
+        if (config_line(nl + 1))
+            config_lost = true;
 
     val++;
 
     char *end = memchr(val, '\n', strnlen(val, MAX_VAR_SIZE + 1));
     if (!end)
-        return false;
+        return config_unreadable(*p);
 
     *end = 0;
     printf("Found variable %.*s\n", (int)(val - (char *)*p - 1), (char *)*p);
 
     if (IS_VAR("chosen.")) {
-        if (chosen_cnt >= MAX_CHOSEN_VARS)
+        if (chosen_cnt >= MAX_CHOSEN_VARS) {
             printf("Too many chosen vars, ignoring %.*s\n", (int)(val - (char *)*p - 1),
                    (char *)*p);
-        else
+            config_lost = true;
+        } else {
             chosen[chosen_cnt++] = (char *)*p;
+        }
+    } else if (IS_VAR("m1n1.config-lost=")) {
+        /* Any value: an earlier stage lost a line, and nothing after it can take that back */
+        config_lost = true;
     } else if (IS_VAR("chainload=")) {
         chainload_spec = val;
     } else if (IS_VAR("boot=")) {
@@ -233,6 +278,7 @@ static bool check_var(u8 **p)
     }
 
     *p = (u8 *)(end + 1);
+    config_seen = true;
     return true;
 }
 
@@ -273,13 +319,17 @@ static void *load_one_payload(void *start, size_t size)
         printf("Found a m1n1 custom logo payload at %p, skipping 0x%lx bytes\n", p,
                sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE);
         return p + sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE;
-    } else if (check_var(&p)) {
-        return p;
     } else if (!memcmp(p, empty, sizeof empty) ||
                !memcmp(p + 0x05, img4_magic, sizeof img4_magic)) { // SEPFW after m1n1
+        /* Before check_var(): an end whose bytes also read as a line is still the end */
         printf("No more payloads at %p\n", p);
         return NULL;
+    } else if (check_var(&p)) {
+        return p;
     } else {
+        /* After the kernel or a config line, more config may follow (update-m1n1 puts it last) */
+        if (kernel || config_seen)
+            config_lost = true;
         printf("Unknown payload at %p (magic: %02x%02x%02x%02x)\n", p, p[0], p[1], p[2], p[3]);
         return NULL;
     }
@@ -386,6 +436,12 @@ int payload_run(void)
 
     if (chainload_spec) {
         next_stage.entry = NULL;
+        /* Last, after every owner line, in a slot of its own: the next stage cannot miss it */
+        if (config_lost && !config_lost_passed) {
+            printf("Payload: a config line was lost: telling the next stage\n");
+            chosen[chosen_cnt++] = CONFIG_LOST_VAR;
+            config_lost_passed = true;
+        }
         int ret = chainload_load(chainload_spec, chosen, &chosen_cnt, ARRAY_SIZE(chosen));
         if (ret) {
             next_stage.entry = NULL;
@@ -450,6 +506,8 @@ int payload_run(void)
                 printf("Failed to kboot set %s\n", var + 7);
         }
 
+        if (config_lost)
+            kboot_set_config_lost();
         if (kboot_prepare_dt(fdt)) {
             printf("Failed to prepare FDT!\n");
             goto boot_failed;

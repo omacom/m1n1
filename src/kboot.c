@@ -56,6 +56,13 @@ static int dt_bufsize = 0;
 static void *initrd_start = NULL;
 static size_t initrd_size = 0;
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
+/* Entries dt_set_m3_defaults() added; any other kboot_set_chosen() of the entry clears its flag */
+static bool chosen_is_default[MAX_CHOSEN_PARAMS];
+/*
+ * A config line was lost this session: a kboot_set_chosen() failed, or the payload scan lost one
+ * (kboot_set_config_lost()). An owner's chosen.<switch>=0 may be among the lost.
+ */
+static bool chosen_lost;
 static char *uboot_config[MAX_UBOOT_CONFIGS][2];
 
 extern const char *const m1n1_version;
@@ -354,6 +361,175 @@ static int dt_set_t8140_wfx_args(int node)
     free(updated);
     if (ret)
         bail("FDT: couldn't set T8140 bootargs\n");
+    return 0;
+}
+
+/*
+ * M3 graphics on by default. The M3 Airs (J613, J615) and the M3 Pros (J514S, J516S) hand
+ * the internal display and the GPU to the OS on every boot, as M1 and M2 Macs do, with no
+ * boot.bin config line. Each switch below is put in /chosen as "1" unless a config line set it
+ * already, so chosen.<switch>=0 in /etc/m1n1.conf (update-m1n1 copies it into boot.bin) still
+ * turns that one off, and chosen.asahi,m3-defaults=0 turns all of them off. If a config line was
+ * lost this session (a full table, a failed allocation, or one the payload scan lost), an owner's
+ * =0 may be the one lost while an earlier =1 still stands, so these Macs hand no graphics over:
+ * no default goes in, and every graphics line of the board is dropped. They still boot, on the
+ * boot framebuffer. Only the switch
+ * changes: every check behind it (board, firmware, reservations, PMP values, resources) still
+ * runs, and a failed check still leaves the boot framebuffer and a disabled GPU node.
+ *
+ * The Air switches are the recipe the boot package wrote on these Macs: the display handoff
+ * (which also passes the PMP values), the GPU, and the stand-in power model with this Mac's
+ * leakage fuse. It wrote the GPU lines only beside a display line of 1, so an owner's
+ * chosen.asahi,t8122-dcp=0 keeps the default GPU switches off as well; an owner's own GPU line
+ * still counts. chosen.asahi,t8122-dcpext stays off. The Pro switches are its display handoff
+ * and GPU; its external display handoffs (t6030-dcpext, t6030-dispext) keep their own lines.
+ * Other boards, the M3 Max (T6031) included, are not touched.
+ */
+struct m3_default_board {
+    const char *soc;
+    const char *const *boards;
+    const char *const *switches;
+    /* The switches after the first get a default only while the first is 1 or unset */
+    bool rest_need_first;
+    /* Prefixes of the board's graphics lines, all dropped when a config line was lost */
+    const char *const *graphics;
+};
+
+static const char *const m3_air_boards[] = {"apple,j613", "apple,j615", NULL};
+static const char *const m3_air_switches[] = {
+    "asahi,t8122-dcp", "asahi,t8122-gpu", "asahi,t8122-gpu-power-standin",
+    "asahi,t8122-gpu-fuse-leakage", NULL};
+static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
+static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
+static const char *const m3_air_graphics[] = {"asahi,t8122-", "asahi,j613-", "asahi,j615-", NULL};
+static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
+
+static const struct m3_default_board m3_default_boards[] = {
+    {"apple,t8122", m3_air_boards, m3_air_switches, true, m3_air_graphics},
+    {"apple,t6030", m3_pro_boards, m3_pro_switches, false, m3_pro_graphics},
+};
+
+#define M3_DEFAULTS_SWITCH "asahi,m3-defaults"
+
+/* The config value of chosen.<name>, NULL when no config line set it */
+static const char *kboot_chosen_param(const char *name)
+{
+    for (int i = 0; i < MAX_CHOSEN_PARAMS && chosen_params[i][0]; i++)
+        if (!strcmp(chosen_params[i][0], name))
+            return chosen_params[i][1] ? chosen_params[i][1] : "";
+    return NULL;
+}
+
+/*
+ * A later preparation (the proxy can prepare again, with another device tree or after changing
+ * the config) first removes the defaults an earlier one added, so an earlier default never
+ * answers for a later config or board. An owner's later value for a switch clears its flag and
+ * is kept.
+ */
+static void dt_drop_m3_defaults(void)
+{
+    int i = 0;
+    while (i < MAX_CHOSEN_PARAMS && chosen_params[i][0]) {
+        if (chosen_is_default[i])
+            kboot_delete_chosen(chosen_params[i][0]); /* the next entry moves to i */
+        else
+            i++;
+    }
+}
+
+/* Every graphics line of the board, the owner's included */
+static void dt_drop_m3_graphics(const struct m3_default_board *e)
+{
+    for (const char *const *g = e->graphics; *g; g++) {
+        int i = 0;
+        while (i < MAX_CHOSEN_PARAMS && chosen_params[i][0]) {
+            if (!strncmp(chosen_params[i][0], *g, strlen(*g)))
+                kboot_delete_chosen(chosen_params[i][0]); /* the next entry moves to i */
+            else
+                i++;
+        }
+    }
+}
+
+static int dt_set_m3_defaults(void)
+{
+    dt_drop_m3_defaults();
+    for (size_t i = 0; i < sizeof(m3_default_boards) / sizeof(m3_default_boards[0]); i++) {
+        const struct m3_default_board *e = &m3_default_boards[i];
+        const char *board = NULL;
+
+        if (fdt_node_check_compatible(dt, 0, e->soc))
+            continue;
+        for (const char *const *b = e->boards; *b; b++) {
+            if (!fdt_node_check_compatible(dt, 0, *b)) {
+                board = *b;
+                break;
+            }
+        }
+        if (!board)
+            continue;
+
+        if (chosen_lost) {
+            dt_drop_m3_graphics(e);
+            printf("kboot: %s: a config line was lost, so an owner's =0 may be missing: no "
+                   "graphics handoff\n",
+                   board);
+            return 0;
+        }
+        const char *all = kboot_chosen_param(M3_DEFAULTS_SWITCH);
+        if (all && strcmp(all, "1")) {
+            printf("kboot: %s: graphics defaults off (chosen.%s=%s)\n", board, M3_DEFAULTS_SWITCH,
+                   all);
+            return 0;
+        }
+        /*
+         * The Air's GPU only beside its display, as the boot package's recipe had it: an owner's
+         * chosen.asahi,t8122-dcp other than 1 keeps the default GPU switches off too. The owner's
+         * own lines, a GPU line included, stay as written.
+         */
+        int count = 0;
+        while (e->switches[count])
+            count++;
+        const char *first = kboot_chosen_param(e->switches[0]);
+        if (e->rest_need_first && first && strcmp(first, "1")) {
+            printf("kboot: %s: chosen.%s=%s: no default switch beside it\n", board, e->switches[0],
+                   first);
+            count = 1;
+        }
+        /* All of a board's missing switches go in, or none: never half of the Air recipe */
+        int missing = 0, used = 0;
+        for (int k = 0; k < count; k++) {
+            const char *sw = e->switches[k], *set = kboot_chosen_param(sw);
+            if (set)
+                printf("kboot: %s: chosen.%s=%s from the config\n", board, sw, set);
+            else
+                missing++;
+        }
+        while (used < MAX_CHOSEN_PARAMS && chosen_params[used][0])
+            used++;
+        if (missing > MAX_CHOSEN_PARAMS - used) {
+            printf("kboot: %s: no room for %d default switches (%d free): graphics stay as the "
+                   "config sets them\n",
+                   board, missing, MAX_CHOSEN_PARAMS - used);
+            return 0;
+        }
+        for (int k = 0; k < count; k++) {
+            const char *sw = e->switches[k];
+            if (kboot_chosen_param(sw))
+                continue;
+            int idx = kboot_set_chosen(sw, "1");
+            if (idx < 0) {
+                dt_drop_m3_defaults();
+                printf("kboot: %s: could not add the default chosen.%s=1: graphics stay as the "
+                       "config sets them\n",
+                       board, sw);
+                return 0;
+            }
+            chosen_is_default[idx] = true;
+            printf("kboot: %s: chosen.%s=1 by default (chosen.%s=0 turns it off)\n", board, sw, sw);
+        }
+        return 0;
+    }
     return 0;
 }
 
@@ -6037,33 +6213,53 @@ void kboot_set_initrd(void *start, size_t size)
 int kboot_set_chosen(const char *name, const char *value)
 {
     int i = 0;
+    char *copy = NULL;
 
-    if (!name)
+    if (!name) {
+        chosen_lost = true;
         return -1;
+    }
+    /* The new value first: a failure leaves an existing entry (an owner's =0) as it was */
+    if (value) {
+        copy = calloc(strlen(value) + 1, 1);
+        if (!copy) {
+            chosen_lost = true;
+            return -1;
+        }
+        strcpy(copy, value);
+    }
 
     for (i = 0; i < MAX_CHOSEN_PARAMS; i++) {
         if (!chosen_params[i][0]) {
             chosen_params[i][0] = calloc(strlen(name) + 1, 1);
+            if (!chosen_params[i][0]) {
+                free(copy);
+                chosen_lost = true;
+                return -1;
+            }
             strcpy(chosen_params[i][0], name);
             break;
         }
 
-        if (!strcmp(name, chosen_params[i][0])) {
-            free(chosen_params[i][1]);
-            chosen_params[i][1] = NULL;
+        if (!strcmp(name, chosen_params[i][0]))
             break;
-        }
     }
 
-    if (i >= MAX_CHOSEN_PARAMS)
+    if (i >= MAX_CHOSEN_PARAMS) {
+        free(copy);
+        chosen_lost = true;
         return -1;
-
-    if (value) {
-        chosen_params[i][1] = calloc(strlen(value) + 1, 1);
-        strcpy(chosen_params[i][1], value);
     }
 
+    free(chosen_params[i][1]);
+    chosen_params[i][1] = copy;
+    chosen_is_default[i] = false;
     return i;
+}
+
+void kboot_set_config_lost(void)
+{
+    chosen_lost = true;
 }
 
 void kboot_delete_chosen(const char *name)
@@ -6079,6 +6275,9 @@ void kboot_delete_chosen(const char *name)
         memmove(&chosen_params[i], &chosen_params[i + 1],
                 (MAX_CHOSEN_PARAMS - i - 1) * sizeof(chosen_params[0]));
         memset(&chosen_params[MAX_CHOSEN_PARAMS - 1], 0, sizeof(chosen_params[0]));
+        memmove(&chosen_is_default[i], &chosen_is_default[i + 1],
+                (MAX_CHOSEN_PARAMS - i - 1) * sizeof(chosen_is_default[0]));
+        chosen_is_default[MAX_CHOSEN_PARAMS - 1] = false;
         return;
     }
 }
@@ -6325,6 +6524,8 @@ int kboot_prepare_dt(void *fdt)
     /* setup console log buffer early to capture as much log as possible */
     dt_setup_mtd_phram();
 
+    if (dt_set_m3_defaults())
+        return -1;
     if (dt_set_chosen())
         return -1;
     if (dt_set_speaker_safety())
