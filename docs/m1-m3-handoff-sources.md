@@ -48,10 +48,16 @@ Repository links for these source revisions are
   The panel and each external-controller transaction are atomic. The optional
   native path is not exercised by a J516S boot using the legacy handoff.
 * T6031 GPU probing requires the exact chosen string `asahi,t6031-gpu=1`.
-  This does not qualify stand-in power data or widen the kernel's board gate.
+  On a J516C, `dt_set_m3_defaults()` sets it unless a config line set it.
+  `chosen.asahi,t6031-gpu=0` keeps the handoff off. `chosen.asahi,m3-defaults=0`
+  prevents the default and keeps the owner's explicit lines as written, an
+  owner's `asahi,t6031-gpu=1` included. After a lost config line no T6031 line
+  is passed on, the owner's `=1` included. A J514C still needs the line. This
+  does not qualify stand-in power data or widen the kernel's board gate.
 * The T6031 display handoff requires the exact chosen string
-  `asahi,t6031-dcp=1`. Its `__OS_LOG` reservations are made on every J514C or
-  J516C boot without it.
+  `asahi,t6031-dcp=1`, and is not set by default: the kernel's T6031 display
+  also needs `apple_t6031_display.enable=1` on its command line. Its `__OS_LOG`
+  reservations are made on every J514C or J516C boot without it.
 * The T8122 external marker is u32 equal to 1, published last after reservations
   and firmware version. Suppliers and routes stay disabled for the kernel gate.
   The known external-display kernel contract requires firmware-compat 14,7,0.

@@ -2025,8 +2025,9 @@ static const struct g15_soc g15_soc_t8122_standin = {
 };
 
 /*
- * T6031 (M3 Max, G15C), J514C/J516C only, requires chosen.asahi,t6031-gpu=1: the J613 14.x
- * setup with T6031 values, with these differences.
+ * T6031 (M3 Max, G15C), J514C/J516C only, requires chosen.asahi,t6031-gpu=1 (on a J516C,
+ * dt_set_m3_defaults() sets it unless a config line set it): the J613 14.x setup with T6031
+ * values, with these differences.
  * - The identity, topology and core masks come from the bounded powered identity read that runs
  *   first (t6031_gpu_probe()), which puts the GPU power closure back exactly as iBoot left it. The
  *   setup itself touches no GPU hardware and leaves the GPU unpowered: the kernel's power domain
@@ -2434,7 +2435,8 @@ static int dt_set_gpu_g15(void *dt, const struct g15_soc *soc)
      * from /etc/m1n1.conf):  chosen.asahi,t6030-gpu=1 (chosen.asahi,t8122-gpu=1 on T8122)
      * Without it this is a dry run: the firmware identification (DRAM reads only) and all ADT/DT
      * checks run and are logged, then the gpu node is left disabled. T6031 also
-     * requires an explicit opt-in before its powered identity probe.
+     * requires its switch before its powered identity probe. The M3 switches of the boards
+     * dt_set_m3_defaults() covers are set by default, and a config line of 0 still turns one off.
      */
     bool armed = g15_optin(dt, soc->optin);
 
@@ -2658,7 +2660,9 @@ static void t6031_gpu_probe(void *dt)
 /*
  * T6031 (J514C/J516C): the firmware image facts, the bounded powered identity read, then the GPU
  * setup (which itself touches no GPU hardware). Each part is fail-soft; all three
- * require chosen.asahi,t6031-gpu=1 because this profile uses unmeasured power stand-ins.
+ * require chosen.asahi,t6031-gpu=1 because this profile uses unmeasured power stand-ins. On a
+ * J516C dt_set_m3_defaults() sets it unless a config line set it (=0 keeps all three off); a
+ * J514C still needs the line.
  */
 static int dt_set_gpu_t6031(void *dt)
 {
