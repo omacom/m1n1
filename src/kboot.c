@@ -365,9 +365,9 @@ static int dt_set_t8140_wfx_args(int node)
 }
 
 /*
- * M3 graphics on by default, with no boot.bin config line. The M3 Airs (J613, J615) and the M3
- * Pros (J514S, J516S) hand the internal display and the GPU to the OS on every boot, as M1 and M2
- * Macs do; the 16-inch M3 Max with the 40-core GPU (J516C) hands over its GPU. Each switch below
+ * M3 graphics on by default, with no boot.bin config line. The M3 Airs (J613, J615), the M3 Pros
+ * (J514S, J516S) and the 16-inch M3 Max with the 40-core GPU (J516C) hand the internal display and
+ * the GPU to the OS on every boot, as M1 and M2 Macs do. Each switch below
  * is put in /chosen as "1" unless a config line set it
  * already, so chosen.<switch>=0 in /etc/m1n1.conf (update-m1n1 copies it into boot.bin) still
  * turns that one off, and chosen.asahi,m3-defaults=0 adds none of them (an owner's own lines,
@@ -386,11 +386,12 @@ static int dt_set_t8140_wfx_args(int node)
  * still counts. chosen.asahi,t8122-dcpext stays off. The Pro switches are its display handoff
  * and GPU; its external display handoffs (t6030-dcpext, t6030-dispext) keep their own lines.
  *
- * The J516C switch is its GPU only. Its display stays on the boot framebuffer unless the owner
- * sets chosen.asahi,t6031-dcp=1: the kernel's T6031 display takes the handoff only with
- * apple_t6031_display.enable=1 on its own command line, so a default handoff would not light it.
- * The J514C (a T6031 board the kernel's GPU driver refuses) and the T6034 Maxes (J514M, J516M)
- * are not touched, nor is any other board.
+ * The J516C switches are its display handoff and GPU, each on its own as on the Pro: an owner's
+ * chosen.asahi,t6031-gpu=0 keeps the GPU off and the display default still goes in, and
+ * chosen.asahi,t6031-dcp=0 the other way round. The kernel decides whether it takes the display
+ * over; one that does not leaves it on the boot framebuffer. The J514C (a T6031 board the
+ * kernel's GPU driver refuses) and the T6034 Maxes (J514M, J516M) are not touched, nor is any
+ * other board.
  */
 struct m3_default_board {
     const char *soc;
@@ -409,7 +410,7 @@ static const char *const m3_air_switches[] = {
 static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
 static const char *const m3_max_boards[] = {"apple,j516c", NULL};
-static const char *const m3_max_switches[] = {"asahi,t6031-gpu", NULL};
+static const char *const m3_max_switches[] = {"asahi,t6031-dcp", "asahi,t6031-gpu", NULL};
 static const char *const m3_air_graphics[] = {"asahi,t8122-", "asahi,j613-", "asahi,j615-", NULL};
 static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
 static const char *const m3_max_graphics[] = {"asahi,t6031-", NULL};
@@ -5323,7 +5324,8 @@ static int dt_set_display(void)
          * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1; the external DCP firmware is
          * reserved only with chosen.asahi,t8122-dcpext=1 and that handoff. On T6031 it does nothing
          * unless the board is a J514C or J516C, and reserves only __OS_LOG unless
-         * chosen.asahi,t6031-dcp=1.
+         * chosen.asahi,t6031-dcp=1 (on a J516C, dt_set_m3_defaults() sets it unless a config line
+         * set it).
          */
         ret = dt_set_display_handoff(dt);
         if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))

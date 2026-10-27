@@ -55,9 +55,14 @@ Repository links for these source revisions are
   is passed on, the owner's `=1` included. A J514C still needs the line. This
   does not qualify stand-in power data or widen the kernel's board gate.
 * The T6031 display handoff requires the exact chosen string
-  `asahi,t6031-dcp=1`, and is not set by default: the kernel's T6031 display
-  also needs `apple_t6031_display.enable=1` on its command line. Its `__OS_LOG`
-  reservations are made on every J514C or J516C boot without it.
+  `asahi,t6031-dcp=1`. On a J516C, `dt_set_m3_defaults()` sets it unless a
+  config line set it, beside the GPU default, with the same `=0`,
+  `m3-defaults=0` and lost-line rules. Each switch stands alone: `t6031-gpu=0`
+  keeps the GPU off and still gets the display default, and `t6031-dcp=0` the
+  other way round. A J514C still needs the line. Whether the kernel takes the
+  display over is the kernel's decision; one that does not leaves the boot
+  framebuffer. Its `__OS_LOG` reservations are made on every J514C or J516C
+  boot without it.
 * The T8122 external marker is u32 equal to 1, published last after reservations
   and firmware version. Suppliers and routes stay disabled for the kernel gate.
   The known external-display kernel contract requires firmware-compat 14,7,0.
