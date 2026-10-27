@@ -58,7 +58,10 @@ static size_t initrd_size = 0;
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
 /* Entries dt_set_m3_defaults() added; any other kboot_set_chosen() of the entry clears its flag */
 static bool chosen_is_default[MAX_CHOSEN_PARAMS];
-/* A kboot_set_chosen() failed this session: an owner's chosen.<switch>=0 may be among the lost */
+/*
+ * A config line was lost this session: a kboot_set_chosen() failed, or the payload scan lost one
+ * (kboot_set_config_lost()). An owner's chosen.<switch>=0 may be among the lost.
+ */
 static bool chosen_lost;
 static char *uboot_config[MAX_UBOOT_CONFIGS][2];
 
@@ -366,10 +369,11 @@ static int dt_set_t8140_wfx_args(int node)
  * the internal display and the GPU to the OS on every boot, as M1 and M2 Macs do, with no
  * boot.bin config line. Each switch below is put in /chosen as "1" unless a config line set it
  * already, so chosen.<switch>=0 in /etc/m1n1.conf (update-m1n1 copies it into boot.bin) still
- * turns that one off, and chosen.asahi,m3-defaults=0 turns all of them off. If any chosen entry
- * could not be stored this session (a full table, a failed allocation), an owner's =0 may be the
- * one lost, so no default goes in at all (payload_run() does not boot at all when it loses a
- * config line or cannot store one). Only the switch
+ * turns that one off, and chosen.asahi,m3-defaults=0 turns all of them off. If a config line was
+ * lost this session (a full table, a failed allocation, or one the payload scan lost), an owner's
+ * =0 may be the one lost while an earlier =1 still stands, so these Macs hand no graphics over:
+ * no default goes in, and every graphics line of the board is dropped. They still boot, on the
+ * boot framebuffer. Only the switch
  * changes: every check behind it (board, firmware, reservations, PMP values, resources) still
  * runs, and a failed check still leaves the boot framebuffer and a disabled GPU node.
  *
@@ -387,6 +391,8 @@ struct m3_default_board {
     const char *const *switches;
     /* The switches after the first get a default only while the first is 1 or unset */
     bool rest_need_first;
+    /* Prefixes of the board's graphics lines, all dropped when a config line was lost */
+    const char *const *graphics;
 };
 
 static const char *const m3_air_boards[] = {"apple,j613", "apple,j615", NULL};
@@ -395,10 +401,12 @@ static const char *const m3_air_switches[] = {
     "asahi,t8122-gpu-fuse-leakage", NULL};
 static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
+static const char *const m3_air_graphics[] = {"asahi,t8122-", "asahi,j613-", "asahi,j615-", NULL};
+static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
 
 static const struct m3_default_board m3_default_boards[] = {
-    {"apple,t8122", m3_air_boards, m3_air_switches, true},
-    {"apple,t6030", m3_pro_boards, m3_pro_switches, false},
+    {"apple,t8122", m3_air_boards, m3_air_switches, true, m3_air_graphics},
+    {"apple,t6030", m3_pro_boards, m3_pro_switches, false, m3_pro_graphics},
 };
 
 #define M3_DEFAULTS_SWITCH "asahi,m3-defaults"
@@ -429,6 +437,20 @@ static void dt_drop_m3_defaults(void)
     }
 }
 
+/* Every graphics line of the board, the owner's included */
+static void dt_drop_m3_graphics(const struct m3_default_board *e)
+{
+    for (const char *const *g = e->graphics; *g; g++) {
+        int i = 0;
+        while (i < MAX_CHOSEN_PARAMS && chosen_params[i][0]) {
+            if (!strncmp(chosen_params[i][0], *g, strlen(*g)))
+                kboot_delete_chosen(chosen_params[i][0]); /* the next entry moves to i */
+            else
+                i++;
+        }
+    }
+}
+
 static int dt_set_m3_defaults(void)
 {
     dt_drop_m3_defaults();
@@ -448,8 +470,9 @@ static int dt_set_m3_defaults(void)
             continue;
 
         if (chosen_lost) {
-            printf("kboot: %s: a chosen config entry could not be stored, so an owner's =0 may be "
-                   "missing: graphics defaults stay off\n",
+            dt_drop_m3_graphics(e);
+            printf("kboot: %s: a config line was lost, so an owner's =0 may be missing: no "
+                   "graphics handoff\n",
                    board);
             return 0;
         }
@@ -6232,6 +6255,11 @@ int kboot_set_chosen(const char *name, const char *value)
     chosen_params[i][1] = copy;
     chosen_is_default[i] = false;
     return i;
+}
+
+void kboot_set_config_lost(void)
+{
+    chosen_lost = true;
 }
 
 void kboot_delete_chosen(const char *name)

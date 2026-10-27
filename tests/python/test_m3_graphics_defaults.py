@@ -18,6 +18,7 @@ def harness():
     tables = between(source, "struct m3_default_board {", '#define M3_DEFAULTS_SWITCH "asahi,m3-defaults"\n')
     lookup = between(source, "static const char *kboot_chosen_param(const char *name)\n{", "\n}\n")
     drop = between(source, "static void dt_drop_m3_defaults(void)\n{", "\n}\n")
+    drop_graphics = between(source, "static void dt_drop_m3_graphics(", "\n}\n")
     setter = between(source, "int kboot_set_chosen(const char *name, const char *value)\n{", "\n}\n")
     deleter = between(source, "void kboot_delete_chosen(const char *name)\n{", "\n}\n")
     return (r'''
@@ -43,7 +44,7 @@ static void *test_calloc(size_t n, size_t size)
 }
 #define calloc test_calloc
 void kboot_delete_chosen(const char *name);
-''' + setter + "\n" + deleter + "\n" + tables + lookup + "\n" + drop + "\n" +
+''' + setter + "\n" + deleter + "\n" + tables + lookup + "\n" + drop + "\n" + drop_graphics + "\n" +
         definition(source, "dt_set_m3_defaults") + r'''
 /* the same write as dt_set_chosen(): value plus its NUL */
 static void write_chosen(void)
@@ -236,8 +237,8 @@ int main(void)
     assert(entries() == 4 && !strcmp(chosen_params[0][0], "asahi,t8122-gpu") &&
            !strcmp(chosen_params[0][1], "0") && !chosen_is_default[0]);
     TREE("apple,j613\0apple,t8122\0apple,arm-platform"); assert(!run());
-    assert(present("asahi,t8122-gpu") && !armed("asahi,t8122-gpu"));
-    assert(!present("asahi,t8122-dcp") && entries() == 1);      /* fail closed: no defaults */
+    for (int i = 0; i < 4; i++) assert(!present(air[i]));     /* fail closed: no graphics at all */
+    assert(entries() == 0);
 
     /* an owner's =0 that could not be stored at all: no default goes in */
     for (int b = 0; b < 2; b++) {
@@ -287,6 +288,37 @@ int main(void)
     for (int i = 0; i < 4; i++) assert(armed(air[i]));
     assert(entries() == 4);
     /* the Pro keeps its GPU default beside a display line at 0 (tested above): no such rule there */
+
+    /* after a lost line an owner's earlier =1 no longer stands on the four boards: every graphics
+       line of the board goes, other lines stay */
+    RESET("apple,j613\0apple,t8122\0apple,arm-platform");
+    assert(kboot_set_chosen("asahi,t8122-gpu", "1") >= 0);
+    assert(kboot_set_chosen("asahi,t8122-dcpext", "1") >= 0);
+    assert(kboot_set_chosen("asahi,j615-25g83-experimental", "1") >= 0);
+    assert(kboot_set_chosen("test,other", "1") >= 0);
+    chosen_lost = true;
+    assert(!run());
+    for (int i = 0; i < 4; i++) assert(!present(air[i]));
+    assert(!present("asahi,t8122-dcpext") && !present("asahi,j615-25g83-experimental"));
+    assert(present("test,other") && entries() == 1);
+    RESET("apple,j516s\0apple,t6030\0apple,arm-platform");
+    assert(kboot_set_chosen("asahi,t6030-gpu", "1") >= 0);
+    assert(kboot_set_chosen("asahi,t6030-dispext", "1") >= 0);
+    chosen_lost = true;
+    assert(!run());
+    for (int i = 0; i < 2; i++) assert(!present(pro[i]));
+    assert(!present("asahi,t6030-dispext") && entries() == 0);
+    /* other boards keep their lines: the rule is only for the four with defaults */
+    RESET("apple,j516c\0apple,t6031\0apple,arm-platform");
+    assert(kboot_set_chosen("asahi,t6031-gpu", "1") >= 0);
+    chosen_lost = true;
+    assert(!run());
+    assert(armed("asahi,t6031-gpu") && entries() == 1);
+    RESET("apple,j293\0apple,t8103\0apple,arm-platform");
+    assert(kboot_set_chosen("asahi,t8122-gpu", "1") >= 0);   /* a line no M1 reads: kept as is */
+    chosen_lost = true;
+    assert(!run());
+    assert(armed("asahi,t8122-gpu") && entries() == 1);
     puts("ok");
     return 0;
 }

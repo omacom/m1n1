@@ -179,16 +179,18 @@ static void *load_kernel(void *p, size_t size)
 #define IS_VAR(x) !strncmp((char *)*p, x, strlen(x))
 
 #define MAX_CHOSEN_VARS 16
+/* Passed after every other line to a chainloaded stage when a config line was lost */
+#define CONFIG_LOST_VAR "m1n1.config-lost=1"
 
+/* The two extra slots carry CONFIG_LOST_VAR and nvme.adopt without reducing the chosen limit. */
 #ifdef CHAINLOADING
 static size_t chosen_cnt = 1;
-/* The extra slot carries nvme.adopt without reducing the chosen-variable limit. */
-static char *chosen[MAX_CHOSEN_VARS + 1] = {
+static char *chosen[MAX_CHOSEN_VARS + 2] = {
     "chosen.asahi,m1n1-stage1-version=" BUILD_TAG,
 };
 #else
 static size_t chosen_cnt = 0;
-static char *chosen[MAX_CHOSEN_VARS + 1];
+static char *chosen[MAX_CHOSEN_VARS + 2];
 #endif
 
 static bool enable_tso = false;
@@ -197,14 +199,18 @@ static bool enable_tso = false;
  * A config line that cannot be kept or read: a chosen. line past the end of chosen[]; a line of a
  * variable m1n1 knows that has no newline or a name or value too long (the scan stops there), or
  * that a line without '=' took into its name; or a stop at unknown data after the kernel or a
- * config line, before config that may follow. Booting would keep what the config said before it,
- * an owner's chosen.<switch>=1 against a lost =0 perhaps, so payload_run() boots nothing.
+ * config line, before config that may follow. A chainloading stage 1 that lost one says so with
+ * CONFIG_LOST_VAR. The value the config set before the lost line still stands, an owner's
+ * chosen.<switch>=1 against a lost =0 perhaps, so on the Macs with M3 graphics defaults kboot
+ * then hands no graphics over (kboot_set_config_lost()). Everything else boots as before.
  */
 static bool config_lost = false;
 static bool config_seen = false;
+static bool config_lost_passed = false;
 
 static const char *const config_names[] = {
-    "chosen.", "chainload=", "boot=", "nvme.adopt=", "display=", "mitigations=", "tso="};
+    "chosen.",  "chainload=",   "boot=", "nvme.adopt=",
+    "display=", "mitigations=", "tso=",  "m1n1.config-lost="};
 
 /* The start of a line of a variable m1n1 knows */
 static bool config_line(const char *s)
@@ -250,6 +256,9 @@ static bool check_var(u8 **p)
         } else {
             chosen[chosen_cnt++] = (char *)*p;
         }
+    } else if (IS_VAR("m1n1.config-lost=")) {
+        /* Any value: an earlier stage lost a line, and nothing after it can take that back */
+        config_lost = true;
     } else if (IS_VAR("chainload=")) {
         chainload_spec = val;
     } else if (IS_VAR("boot=")) {
@@ -411,13 +420,6 @@ int payload_run(void)
     }
 #endif
 
-    /* Booting or chainloading would keep what the config said before the lost line */
-    if (config_lost) {
-        printf("Payload: a config line was lost: not booting\n");
-        next_stage.entry = NULL;
-        return -1;
-    }
-
     if (chainload_spec && boot_spec) {
         printf("Payload: cannot combine boot= and chainload=\n");
         next_stage.entry = NULL;
@@ -434,6 +436,12 @@ int payload_run(void)
 
     if (chainload_spec) {
         next_stage.entry = NULL;
+        /* Last, after every owner line, in a slot of its own: the next stage cannot miss it */
+        if (config_lost && !config_lost_passed) {
+            printf("Payload: a config line was lost: telling the next stage\n");
+            chosen[chosen_cnt++] = CONFIG_LOST_VAR;
+            config_lost_passed = true;
+        }
         int ret = chainload_load(chainload_spec, chosen, &chosen_cnt, ARRAY_SIZE(chosen));
         if (ret) {
             next_stage.entry = NULL;
@@ -494,13 +502,12 @@ int payload_run(void)
             assert(val);
             memcpy(var, chosen[i], val - chosen[i]);
             var[val - chosen[i]] = 0; // Terminate var name
-            if (kboot_set_chosen(var + 7, val + 1) < 0) {
-                /* An earlier value of it, or none, would stand in for this one */
-                printf("Failed to kboot set %s: not booting\n", var + 7);
-                goto boot_failed;
-            }
+            if (kboot_set_chosen(var + 7, val + 1) < 0)
+                printf("Failed to kboot set %s\n", var + 7);
         }
 
+        if (config_lost)
+            kboot_set_config_lost();
         if (kboot_prepare_dt(fdt)) {
             printf("Failed to prepare FDT!\n");
             goto boot_failed;
