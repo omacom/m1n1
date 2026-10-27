@@ -179,38 +179,47 @@ static void *load_kernel(void *p, size_t size)
 #define IS_VAR(x) !strncmp((char *)*p, x, strlen(x))
 
 #define MAX_CHOSEN_VARS 16
-/* Added after every other chosen line when one was lost (chosen_config_lost) */
-#define CHOSEN_LOST_VAR "chosen.asahi,m3-defaults=0"
 
-/* The two extra slots carry CHOSEN_LOST_VAR and nvme.adopt without reducing the chosen limit. */
 #ifdef CHAINLOADING
 static size_t chosen_cnt = 1;
-static char *chosen[MAX_CHOSEN_VARS + 2] = {
+/* The extra slot carries nvme.adopt without reducing the chosen-variable limit. */
+static char *chosen[MAX_CHOSEN_VARS + 1] = {
     "chosen.asahi,m1n1-stage1-version=" BUILD_TAG,
 };
 #else
 static size_t chosen_cnt = 0;
-static char *chosen[MAX_CHOSEN_VARS + 2];
+static char *chosen[MAX_CHOSEN_VARS + 1];
 #endif
 
 static bool enable_tso = false;
+
 /*
- * A chosen config line that may never reach the OS: chosen[] was full, a line without '=' took
- * the next one into its name, or the scan stopped at a line it could not read (a chosen. line
- * without its newline, or with a name or value too long) or at anything unreadable after the
- * kernel or a config line. An owner's chosen.<switch>=0 may be the one lost, so payload_run()
- * adds CHOSEN_LOST_VAR after every other chosen line: the M3 graphics defaults stay off here, and
- * in a chainloaded stage, which reads it after its own config.
+ * A config line that cannot be kept or read: a chosen. line past the end of chosen[]; a line of a
+ * variable m1n1 knows that has no newline or a name or value too long (the scan stops there), or
+ * that a line without '=' took into its name; or a stop at unknown data after the kernel or a
+ * config line, before config that may follow. Booting would keep what the config said before it,
+ * an owner's chosen.<switch>=1 against a lost =0 perhaps, so payload_run() boots nothing.
  */
-static bool chosen_config_lost = false;
-static bool chosen_lost_added = false;
+static bool config_lost = false;
 static bool config_seen = false;
 
-/* A chosen line check_var() cannot read: no newline, or a name or value too long */
-static bool chosen_unreadable(u8 *p)
+static const char *const config_names[] = {
+    "chosen.", "chainload=", "boot=", "nvme.adopt=", "display=", "mitigations=", "tso="};
+
+/* The start of a line of a variable m1n1 knows */
+static bool config_line(const char *s)
 {
-    if (!strncmp((char *)p, "chosen.", 7))
-        chosen_config_lost = true;
+    for (size_t i = 0; i < ARRAY_SIZE(config_names); i++)
+        if (!strncmp(s, config_names[i], strlen(config_names[i])))
+            return true;
+    return false;
+}
+
+/* check_var() cannot read this line: lost if it is one of m1n1's */
+static bool config_unreadable(u8 *p)
+{
+    if (config_line((char *)p))
+        config_lost = true;
     return false;
 }
 
@@ -218,16 +227,17 @@ static bool check_var(u8 **p)
 {
     char *val = memchr(*p, '=', strnlen((char *)*p, MAX_VAR_NAME + 1));
     if (!val)
-        return chosen_unreadable(*p);
-    /* A line without '=' took the next line into its name, an owner's =0 perhaps */
-    if (memchr(*p, '\n', val - (char *)*p))
-        chosen_config_lost = true;
+        return config_unreadable(*p);
+    /* A line without '=' took the lines after it into this name */
+    for (char *nl = memchr(*p, '\n', val - (char *)*p); nl; nl = memchr(nl + 1, '\n', val - nl - 1))
+        if (config_line(nl + 1))
+            config_lost = true;
 
     val++;
 
     char *end = memchr(val, '\n', strnlen(val, MAX_VAR_SIZE + 1));
     if (!end)
-        return chosen_unreadable(*p);
+        return config_unreadable(*p);
 
     *end = 0;
     printf("Found variable %.*s\n", (int)(val - (char *)*p - 1), (char *)*p);
@@ -236,7 +246,7 @@ static bool check_var(u8 **p)
         if (chosen_cnt >= MAX_CHOSEN_VARS) {
             printf("Too many chosen vars, ignoring %.*s\n", (int)(val - (char *)*p - 1),
                    (char *)*p);
-            chosen_config_lost = true;
+            config_lost = true;
         } else {
             chosen[chosen_cnt++] = (char *)*p;
         }
@@ -309,7 +319,7 @@ static void *load_one_payload(void *start, size_t size)
     } else {
         /* After the kernel or a config line, more config may follow (update-m1n1 puts it last) */
         if (kernel || config_seen)
-            chosen_config_lost = true;
+            config_lost = true;
         printf("Unknown payload at %p (magic: %02x%02x%02x%02x)\n", p, p[0], p[1], p[2], p[3]);
         return NULL;
     }
@@ -400,13 +410,11 @@ int payload_run(void)
     }
 #endif
 
-    /* Last, so neither this stage nor a chainloaded one keeps an earlier m3-defaults line */
-    if (chosen_config_lost && !chosen_lost_added) {
-        if (chosen_cnt > MAX_CHOSEN_VARS)
-            return -1;
-        printf("Payload: a chosen config line was lost: %s\n", CHOSEN_LOST_VAR);
-        chosen[chosen_cnt++] = CHOSEN_LOST_VAR;
-        chosen_lost_added = true;
+    /* Booting or chainloading would keep what the config said before the lost line */
+    if (config_lost) {
+        printf("Payload: a config line was lost: not booting\n");
+        next_stage.entry = NULL;
+        return -1;
     }
 
     if (chainload_spec && boot_spec) {
@@ -485,8 +493,11 @@ int payload_run(void)
             assert(val);
             memcpy(var, chosen[i], val - chosen[i]);
             var[val - chosen[i]] = 0; // Terminate var name
-            if (kboot_set_chosen(var + 7, val + 1) < 0)
-                printf("Failed to kboot set %s\n", var + 7);
+            if (kboot_set_chosen(var + 7, val + 1) < 0) {
+                /* An earlier value of it, or none, would stand in for this one */
+                printf("Failed to kboot set %s: not booting\n", var + 7);
+                goto boot_failed;
+            }
         }
 
         if (kboot_prepare_dt(fdt)) {

@@ -368,8 +368,8 @@ static int dt_set_t8140_wfx_args(int node)
  * already, so chosen.<switch>=0 in /etc/m1n1.conf (update-m1n1 copies it into boot.bin) still
  * turns that one off, and chosen.asahi,m3-defaults=0 turns all of them off. If any chosen entry
  * could not be stored this session (a full table, a failed allocation), an owner's =0 may be the
- * one lost, so no default goes in at all; a config line the payload scan lost arrives as
- * chosen.asahi,m3-defaults=0 (payload.c). Only the switch
+ * one lost, so no default goes in at all (payload_run() does not boot at all when it loses a
+ * config line or cannot store one). Only the switch
  * changes: every check behind it (board, firmware, reservations, PMP values, resources) still
  * runs, and a failed check still leaves the boot framebuffer and a disabled GPU node.
  *
