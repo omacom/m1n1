@@ -106,8 +106,12 @@ def test_chosen_deletion_preserves_other_properties(tmp_path):
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #define MAX_CHOSEN_PARAMS 4
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
+static bool chosen_is_default[MAX_CHOSEN_PARAMS];
+static bool chosen_lost;
+void kboot_delete_chosen(const char *name);
 ''' + chosen + r'''
 int main(void)
 {
