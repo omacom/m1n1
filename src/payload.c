@@ -310,12 +310,13 @@ static void *load_one_payload(void *start, size_t size)
         printf("Found a m1n1 custom logo payload at %p, skipping 0x%lx bytes\n", p,
                sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE);
         return p + sizeof(custom_logo_magic) + CUSTOM_LOGO_SIZE;
-    } else if (check_var(&p)) {
-        return p;
     } else if (!memcmp(p, empty, sizeof empty) ||
                !memcmp(p + 0x05, img4_magic, sizeof img4_magic)) { // SEPFW after m1n1
+        /* Before check_var(): an end whose bytes also read as a line is still the end */
         printf("No more payloads at %p\n", p);
         return NULL;
+    } else if (check_var(&p)) {
+        return p;
     } else {
         /* After the kernel or a config line, more config may follow (update-m1n1 puts it last) */
         if (kernel || config_seen)

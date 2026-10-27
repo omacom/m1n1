@@ -336,9 +336,13 @@ def test_a_full_but_not_overflowing_kboot_table_boots(build, chainloading):
     booted(boot(build, chainloading, b"tso=1\n" + lines))
 
 
+@pytest.mark.parametrize("header", [
+    b"\x30\x83\x01\x02\x00",                    # an IMG4 header
+    b"\x30\x83\x3d\x0a\x12",                    # one whose length bytes read as "=" then a newline
+], ids=["plain-header", "header-reading-as-a-line"])
 @pytest.mark.parametrize("chainloading", MODES)
-def test_an_img4_end_after_the_config_still_boots(build, chainloading):
-    b = boot(build, chainloading, GPU_OFF, trailer=b"\x30\x83\x01\x02\x00\x16\x04IMG4" + bytes(8))
+def test_an_img4_end_after_the_config_still_boots(build, chainloading, header):
+    b = boot(build, chainloading, GPU_OFF, trailer=header + b"\x16\x04IMG4" + bytes(8))
     booted(b)
     assert b.chosen["asahi,t8122-gpu"] == "0"
 
