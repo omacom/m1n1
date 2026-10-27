@@ -46,6 +46,8 @@ FAMILY = {"j613": ("asahi,t8122-", "asahi,j613-", "asahi,j615-"),
           "j516c": ("asahi,t6031-",)}
 M3_LINES = ("asahi,t8122-", "asahi,t6030-", "asahi,t6031-")
 MAX_GPU = "asahi,t6031-gpu"
+MAX_DCP = "asahi,t6031-dcp"
+MAX = {MAX_DCP: "1", MAX_GPU: "1"}      # the J516C defaults
 AIR = ("asahi,t8122-dcp", "asahi,t8122-gpu", "asahi,t8122-gpu-power-standin",
        "asahi,t8122-gpu-fuse-leakage")
 GPU_ON = b"chosen.asahi,t8122-gpu=1\n"
@@ -459,32 +461,38 @@ def t6031_lines(r):
 
 
 @pytest.mark.parametrize("build", STAGE2)
-def test_the_j516c_gets_its_gpu_default_and_nothing_else(tools, build):
-    """A boot.bin with no config: the real T6031 entry sees the switch and runs its image read,
-    identity probe and setup, all on the first boot that loads this stage 2"""
+def test_the_j516c_gets_its_display_and_gpu_defaults_and_nothing_else(tools, build):
+    """A boot.bin with no config: both switches are armed, and the real T6031 GPU entry sees its
+    switch and runs its image read, identity probe and setup, all on the first boot that loads
+    this stage 2"""
     b = boot(tools, build, b"", board="j516c")
     booted(b)
-    assert t6031_lines(b) == {MAX_GPU: "1"} and MAX_GPU in b.armed
+    assert t6031_lines(b) == MAX and {MAX_DCP, MAX_GPU} <= b.armed
     assert not any(n.startswith(("asahi,t8122-", "asahi,t6030-")) for n in b.chosen)
     assert b.probes == ["t6031-image", "t6031-identity 0"] and b.select == "t6031-g15"
 
 
 @pytest.mark.parametrize("config,lines,select", [
-    (b"chosen.asahi,t6031-gpu=0\n", {MAX_GPU: "0"}, "t6031-disabled"),
-    (b"chosen.asahi,t6031-gpu=1\nchosen.asahi,t6031-gpu=0\n", {MAX_GPU: "0"}, "t6031-disabled"),
-    (b"chosen.asahi,t6031-gpu=1\n", {MAX_GPU: "1"}, "t6031-g15"),
+    (b"chosen.asahi,t6031-gpu=0\n", {MAX_DCP: "1", MAX_GPU: "0"}, "t6031-disabled"),
+    (b"chosen.asahi,t6031-gpu=1\nchosen.asahi,t6031-gpu=0\n", {MAX_DCP: "1", MAX_GPU: "0"},
+     "t6031-disabled"),
+    (b"chosen.asahi,t6031-gpu=1\n", MAX, "t6031-g15"),
     (b"chosen.asahi,m3-defaults=0\n", {}, "t6031-disabled"),
     (b"chosen.asahi,m3-defaults=0\nchosen.asahi,t6031-gpu=1\n", {MAX_GPU: "1"}, "t6031-g15"),
-    (b"chosen.asahi,t6031-dcp=1\n", {"asahi,t6031-dcp": "1", MAX_GPU: "1"}, "t6031-g15"),
-    (b"chosen.asahi,t6031-dcp=0\n", {"asahi,t6031-dcp": "0", MAX_GPU: "1"}, "t6031-g15"),
-], ids=["gpu-off", "gpu-on-then-off", "gpu-on", "master-off", "master-off-gpu-on", "dcp-on",
-        "dcp-off"])
+    (b"chosen.asahi,m3-defaults=0\nchosen.asahi,t6031-dcp=1\n", {MAX_DCP: "1"}, "t6031-disabled"),
+    (b"chosen.asahi,t6031-dcp=1\n", MAX, "t6031-g15"),
+    (b"chosen.asahi,t6031-dcp=0\n", {MAX_DCP: "0", MAX_GPU: "1"}, "t6031-g15"),
+    (b"chosen.asahi,t6031-dcp=0\nchosen.asahi,t6031-gpu=0\n", {MAX_DCP: "0", MAX_GPU: "0"},
+     "t6031-disabled"),
+], ids=["gpu-off", "gpu-on-then-off", "gpu-on", "master-off", "master-off-gpu-on",
+        "master-off-dcp-on", "dcp-on", "dcp-off", "both-off"])
 @pytest.mark.parametrize("build", STAGE2)
 def test_j516c_owner_lines_are_kept(tools, build, config, lines, select):
     b = boot(tools, build, config, board="j516c")
     booted(b)
     assert t6031_lines(b) == lines and b.select == select
     assert bool(b.probes) == (select == "t6031-g15")
+    assert b.armed & {MAX_DCP, MAX_GPU} == {k for k, v in lines.items() if v == "1"}
 
 
 @pytest.mark.parametrize("board", ["j514c", "j514m", "j516m", "j293"])
@@ -498,11 +506,15 @@ def test_other_maxes_and_macs_get_no_default(tools, build, board):
     assert b.select == ("t6031-disabled" if board == "j514c" else "none")
 
 
+@pytest.mark.parametrize("config,lines", [
+    (b"chosen.asahi,t6031-gpu=1\n", {MAX_GPU: "1"}),
+    (b"chosen.asahi,t6031-gpu=1\nchosen.asahi,t6031-dcp=1\n", MAX),
+], ids=["gpu", "gpu-dcp"])
 @pytest.mark.parametrize("build", STAGE2)
-def test_the_j514c_manual_line_works_as_before(tools, build):
-    b = boot(tools, build, b"chosen.asahi,t6031-gpu=1\n", board="j514c")
+def test_the_j514c_manual_line_works_as_before(tools, build, config, lines):
+    b = boot(tools, build, config, board="j514c")
     booted(b)
-    assert t6031_lines(b) == {MAX_GPU: "1"} and b.select == "t6031-g15"
+    assert t6031_lines(b) == lines and b.select == "t6031-g15"
 
 
 @pytest.mark.parametrize("config,armed,select", [
@@ -645,7 +657,7 @@ def test_a_clean_stage_1_leaves_the_j516c_default(tools):
     forwarded = stage1(tools, b"chosen.asahi,efi-system-partition=X\n")
     b = boot(tools, "stage2", b"", board="j516c", trailer=forwarded)
     booted(b)
-    assert t6031_lines(b) == {MAX_GPU: "1"} and b.select == "t6031-g15"
+    assert t6031_lines(b) == MAX and b.select == "t6031-g15"
 
 
 def test_stage_1_loss_survives_a_stage_2_owner_marker_line(tools):
@@ -759,22 +771,34 @@ def test_updater_many_owner_lines_overflow_stage_2_and_keep_graphics_off(tools):
     graphics_off(run(tools, "stage2", image + forwarded))
 
 
-def test_updater_empty_config_hands_the_j516c_gpu_over_on_the_boot_that_loads_it(tools):
+def test_updater_empty_config_hands_the_j516c_display_and_gpu_over_on_the_boot_that_loads_it(tools):
     """No /etc/m1n1.conf line and no second boot: the boot.bin update-m1n1 writes carries the
-    default itself"""
+    defaults itself"""
     image = run_updater(tools, b"", board="j516c")
     forwarded = stage1(tools, b"chosen.asahi,efi-system-partition=X\n")
     b = run(tools, "stage2", image + forwarded, board="j516c")
     booted(b)
-    assert t6031_lines(b) == {MAX_GPU: "1"} and b.select == "t6031-g15"
+    assert t6031_lines(b) == MAX and {MAX_DCP, MAX_GPU} <= b.armed and b.select == "t6031-g15"
 
 
 def test_updater_j516c_gpu_zero_keeps_the_handoff_off(tools):
+    """An existing GPU =0 (as an earlier installer wrote it) stays the owner's: the GPU stays off,
+    and only the display default is added"""
     image = run_updater(tools, b"chosen.asahi,t6031-gpu=0\n", board="j516c")
     forwarded = stage1(tools, b"chosen.asahi,efi-system-partition=X\n")
     b = run(tools, "stage2", image + forwarded, board="j516c")
     booted(b)
-    assert t6031_lines(b) == {MAX_GPU: "0"} and b.select == "t6031-disabled" and not b.probes
+    assert t6031_lines(b) == {MAX_DCP: "1", MAX_GPU: "0"} and MAX_GPU not in b.armed
+    assert b.select == "t6031-disabled" and not b.probes
+
+
+def test_updater_j516c_dcp_zero_keeps_the_display_handoff_off(tools):
+    image = run_updater(tools, b"chosen.asahi,t6031-dcp=0\n", board="j516c")
+    forwarded = stage1(tools, b"chosen.asahi,efi-system-partition=X\n")
+    b = run(tools, "stage2", image + forwarded, board="j516c")
+    booted(b)
+    assert t6031_lines(b) == {MAX_DCP: "0", MAX_GPU: "1"} and MAX_DCP not in b.armed
+    assert b.select == "t6031-g15"
 
 
 def test_updater_j514s_gpu_zero_keeps_the_handoff_off(tools):
