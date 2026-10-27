@@ -368,13 +368,16 @@ static int dt_set_t8140_wfx_args(int node)
  * already, so chosen.<switch>=0 in /etc/m1n1.conf (update-m1n1 copies it into boot.bin) still
  * turns that one off, and chosen.asahi,m3-defaults=0 turns all of them off. If any chosen entry
  * could not be stored this session (a full table, a failed allocation), an owner's =0 may be the
- * one lost, so no default goes in at all. Only the switch
+ * one lost, so no default goes in at all; a config line the payload scan lost arrives as
+ * chosen.asahi,m3-defaults=0 (payload.c). Only the switch
  * changes: every check behind it (board, firmware, reservations, PMP values, resources) still
  * runs, and a failed check still leaves the boot framebuffer and a disabled GPU node.
  *
  * The Air switches are the recipe the boot package wrote on these Macs: the display handoff
  * (which also passes the PMP values), the GPU, and the stand-in power model with this Mac's
- * leakage fuse. chosen.asahi,t8122-dcpext stays off. The Pro switches are its display handoff
+ * leakage fuse. It wrote the GPU lines only beside a display line of 1, so an owner's
+ * chosen.asahi,t8122-dcp=0 keeps the default GPU switches off as well; an owner's own GPU line
+ * still counts. chosen.asahi,t8122-dcpext stays off. The Pro switches are its display handoff
  * and GPU; its external display handoffs (t6030-dcpext, t6030-dispext) keep their own lines.
  * Other boards, the M3 Max (T6031) included, are not touched.
  */
@@ -382,6 +385,8 @@ struct m3_default_board {
     const char *soc;
     const char *const *boards;
     const char *const *switches;
+    /* The switches after the first get a default only while the first is 1 or unset */
+    bool rest_need_first;
 };
 
 static const char *const m3_air_boards[] = {"apple,j613", "apple,j615", NULL};
@@ -392,8 +397,8 @@ static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
 
 static const struct m3_default_board m3_default_boards[] = {
-    {"apple,t8122", m3_air_boards, m3_air_switches},
-    {"apple,t6030", m3_pro_boards, m3_pro_switches},
+    {"apple,t8122", m3_air_boards, m3_air_switches, true},
+    {"apple,t6030", m3_pro_boards, m3_pro_switches, false},
 };
 
 #define M3_DEFAULTS_SWITCH "asahi,m3-defaults"
@@ -454,12 +459,26 @@ static int dt_set_m3_defaults(void)
                    all);
             return 0;
         }
+        /*
+         * The Air's GPU only beside its display, as the boot package's recipe had it: an owner's
+         * chosen.asahi,t8122-dcp other than 1 keeps the default GPU switches off too. The owner's
+         * own lines, a GPU line included, stay as written.
+         */
+        int count = 0;
+        while (e->switches[count])
+            count++;
+        const char *first = kboot_chosen_param(e->switches[0]);
+        if (e->rest_need_first && first && strcmp(first, "1")) {
+            printf("kboot: %s: chosen.%s=%s: no default switch beside it\n", board, e->switches[0],
+                   first);
+            count = 1;
+        }
         /* All of a board's missing switches go in, or none: never half of the Air recipe */
         int missing = 0, used = 0;
-        for (const char *const *sw = e->switches; *sw; sw++) {
-            const char *set = kboot_chosen_param(*sw);
+        for (int k = 0; k < count; k++) {
+            const char *sw = e->switches[k], *set = kboot_chosen_param(sw);
             if (set)
-                printf("kboot: %s: chosen.%s=%s from the config\n", board, *sw, set);
+                printf("kboot: %s: chosen.%s=%s from the config\n", board, sw, set);
             else
                 missing++;
         }
@@ -471,20 +490,20 @@ static int dt_set_m3_defaults(void)
                    board, missing, MAX_CHOSEN_PARAMS - used);
             return 0;
         }
-        for (const char *const *sw = e->switches; *sw; sw++) {
-            if (kboot_chosen_param(*sw))
+        for (int k = 0; k < count; k++) {
+            const char *sw = e->switches[k];
+            if (kboot_chosen_param(sw))
                 continue;
-            int idx = kboot_set_chosen(*sw, "1");
+            int idx = kboot_set_chosen(sw, "1");
             if (idx < 0) {
                 dt_drop_m3_defaults();
                 printf("kboot: %s: could not add the default chosen.%s=1: graphics stay as the "
                        "config sets them\n",
-                       board, *sw);
+                       board, sw);
                 return 0;
             }
             chosen_is_default[idx] = true;
-            printf("kboot: %s: chosen.%s=1 by default (chosen.%s=0 turns it off)\n", board, *sw,
-                   *sw);
+            printf("kboot: %s: chosen.%s=1 by default (chosen.%s=0 turns it off)\n", board, sw, sw);
         }
         return 0;
     }

@@ -257,6 +257,36 @@ int main(void)
     assert(kboot_set_chosen("asahi,t6030-gpu", "0") < 0 && chosen_lost);
     assert(!run());
     expect_none();
+
+    /* the Air's display line at anything but 1 keeps the default GPU switches off */
+    for (int b = 0; b < 2; b++) {
+        if (b) RESET("apple,j615\0apple,t8122\0apple,arm-platform");
+        else RESET("apple,j613\0apple,t8122\0apple,arm-platform");
+        assert(kboot_set_chosen("asahi,t8122-dcp", "0") >= 0);
+        assert(!run());
+        assert(present("asahi,t8122-dcp") && !armed("asahi,t8122-dcp"));
+        for (int i = 1; i < 4; i++) assert(!present(air[i]));
+        assert(entries() == 1);
+    }
+    /* an owner's own GPU line beside it stays, with no default power switches added */
+    RESET("apple,j613\0apple,t8122\0apple,arm-platform");
+    assert(kboot_set_chosen("asahi,t8122-dcp", "0") >= 0);
+    assert(kboot_set_chosen("asahi,t8122-gpu", "1") >= 0);
+    assert(!run());
+    assert(armed("asahi,t8122-gpu") && !present("asahi,t8122-gpu-power-standin"));
+    assert(!present("asahi,t8122-gpu-fuse-leakage") && entries() == 2);
+    /* the display line changed after a first preparation: =0 takes the GPU defaults away, =1 restores them */
+    RESET("apple,j613\0apple,t8122\0apple,arm-platform");
+    assert(!run()); assert(entries() == 4);
+    assert(kboot_set_chosen("asahi,t8122-dcp", "0") >= 0);
+    TREE("apple,j613\0apple,t8122\0apple,arm-platform"); assert(!run());
+    for (int i = 1; i < 4; i++) assert(!present(air[i]));
+    assert(entries() == 1);
+    assert(kboot_set_chosen("asahi,t8122-dcp", "1") >= 0);
+    TREE("apple,j613\0apple,t8122\0apple,arm-platform"); assert(!run());
+    for (int i = 0; i < 4; i++) assert(armed(air[i]));
+    assert(entries() == 4);
+    /* the Pro keeps its GPU default beside a display line at 0 (tested above): no such rule there */
     puts("ok");
     return 0;
 }
