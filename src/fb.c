@@ -331,6 +331,52 @@ static inline rgb_t font_get_pixel(u8 c, u32 x, u32 y)
     return col;
 }
 
+u32 fb_font_width(void)
+{
+    return console.font.width;
+}
+
+u32 fb_font_height(void)
+{
+    return console.font.height;
+}
+
+/* Draw a string with each console-font glyph scaled up by an integer
+ * factor; the glyph intensity modulates the requested color. Used by the
+ * on-screen probe so a phone photo of the firmware framebuffer is legible. */
+void fb_draw_scaled_text(u32 x, u32 y, u32 scale, rgb_t color, const char *str)
+{
+    if (!console.initialized || !scale)
+        return;
+
+    for (; *str; str++) {
+        u8 c = *str;
+
+        if (c >= 0x20 && c < 0x80) {
+            for (u32 gy = 0; gy < console.font.height; gy++)
+                for (u32 gx = 0; gx < console.font.width; gx++) {
+                    u8 v = console.font.ptr[(c - 0x20) * console.font.width * console.font.height
+                                            + gy * console.font.width + gx];
+
+                    if (!v)
+                        continue;
+                    rgb_t col = {.r = color.r * v / 255,
+                                 .g = color.g * v / 255,
+                                 .b = color.b * v / 255};
+                    for (u32 sy = 0; sy < scale; sy++)
+                        for (u32 sx = 0; sx < scale; sx++) {
+                            u32 px = x + gx * scale + sx;
+                            u32 py = y + gy * scale + sy;
+
+                            if (px < fb.width && py < fb.height)
+                                fb_set_pixel(px, py, col);
+                        }
+                }
+        }
+        x += console.font.width * scale;
+    }
+}
+
 static void fb_putbyte(u8 c)
 {
     u32 x = (console.margin.cols + console.cursor.col) * console.font.width;

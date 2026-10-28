@@ -56,4 +56,8 @@ void fb_console_scroll(u32 n);
 void fb_console_reserve_lines(u32 n);
 ssize_t fb_console_write(const char *bfr, size_t len);
 
+u32 fb_font_width(void);
+u32 fb_font_height(void);
+void fb_draw_scaled_text(u32 x, u32 y, u32 scale, rgb_t color, const char *str);
+
 #endif
