@@ -35,7 +35,7 @@
  * T6030 external display processors, dcpext0 and, if the ADT and the device tree have it,
  * dcpext1 (see dcpext6_insts[]): with chosen asahi,t6030-dcpext=1 and the panel handoff
  * published, each processor's firmware memory (apple,t6030-dcpext-memory-ready); with chosen
- * asahi,t6030-dispext=1, its empty, locked display DART and a scanout child
+ * asahi,t6030-dispext=1, that memory plus its empty, locked display DART and a scanout child
  * (apple,t6030-dispext-handoff).
  *
  * T8122 (M3): the __OS_LOG reservations on every boot (oslog_always), and nothing else unless the
@@ -2300,9 +2300,10 @@ static __attribute__((noinline)) void dcp6_handoff(void *dt)
  * only while the processor's CPU power domain is on; it never restarts or locks it. Every external
  * node stays disabled until a kernel that knows the markers enables it.
  *
- * Both processors are armed by the same /chosen flags: asahi,t6030-dcpext for the memory and
- * asahi,t6030-dispext for the display DART. dcpext1 is handed off only if the ADT has it and the
- * device tree describes it (alias dcpext1); otherwise it is skipped and nothing changes. Each
+ * Both processors are armed by the same /chosen flags: asahi,t6030-dcpext for memory only and
+ * asahi,t6030-dispext for the display DART and its prerequisite memory. dcpext1 is handed off
+ * only if the ADT has it and the device tree describes it (alias dcpext1); otherwise it is
+ * skipped and nothing changes. Each
  * handoff is its own transaction, so a refused dcpext1 leaves dcpext0's in place.
  */
 #define DCPEXT6_MARKER  "apple,t6030-dcpext-memory-ready"
@@ -2714,8 +2715,8 @@ static bool dcpext6_present(void *dt, const struct dcpext6_inst *inst)
 /* dcpext0, then dcpext1; each processor's memory handoff before its display DART handoff */
 static void dcpext6_handoffs(void *dt)
 {
-    bool mem = dcpext6_flag(dt, "asahi,t6030-dcpext");
     bool disp = dcpext6_flag(dt, "asahi,t6030-dispext");
+    bool mem = disp || dcpext6_flag(dt, "asahi,t6030-dcpext");
 
     if (!mem && !disp)
         return;
