@@ -2993,6 +2993,30 @@ static int dt_ext26_snapshot(const char *alias)
     return result;
 }
 
+/*
+ * Find an existing reservation for a native26 segment. Only an exact no-map
+ * match of a segment the internal DCP shares may be reused; any other overlap
+ * is refused with -FDT_ERR_INTERNAL. No overlap returns -FDT_ERR_NOTFOUND.
+ */
+static int dt_ext26_existing_reservation(u64 physical, u64 bytes, bool shared)
+{
+    int parent = fdt_path_offset(dt, "/reserved-memory"), node, found = -FDT_ERR_NOTFOUND;
+    fdt_for_each_subnode(node, dt, parent) {
+        int len;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+        if (!reg || len != 16)
+            continue;
+        u64 start = fdt64_ld(reg), span = fdt64_ld(reg + 1);
+        if (start >= physical + bytes || physical >= start + span)
+            continue;
+        if (!shared || start != physical || span != bytes || found >= 0 ||
+            !fdt_getprop(dt, node, "no-map", NULL))
+            return -FDT_ERR_INTERNAL;
+        found = node;
+    }
+    return found;
+}
+
 static int dt_ext26_reserve(const char *alias)
 {
     int nub = adt_path_offset(adt, "/arm-io/dcpext/iop-dcpext-nub");
@@ -3006,20 +3030,10 @@ static int dt_ext26_reserve(const char *alias)
     for (unsigned int i = 0; i < 4; i++) {
         u64 physical = segments[i].phys;
         u64 bytes = ALIGN_UP((u64)segments[i].size, SZ_16K);
-        int parent = fdt_path_offset(dt, "/reserved-memory"), node, found = -1;
-        fdt_for_each_subnode(node, dt, parent) {
-            int len;
-            const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
-            if (!reg || len != 16)
-                continue;
-            u64 start = fdt64_ld(reg), span = fdt64_ld(reg + 1);
-            if (start >= physical + bytes || physical >= start + span)
-                continue;
-            if (start != physical || span != bytes || found >= 0 ||
-                !fdt_getprop(dt, node, "no-map", NULL))
-                return -1;
-            found = node;
-        }
+        /* Only firmware text and the log buffer are shared with the internal DCP. */
+        int found = dt_ext26_existing_reservation(physical, bytes, i == 0 || i == 2);
+        if (found == -FDT_ERR_INTERNAL)
+            return -1;
         if (found < 0) {
             char name[64];
             snprintf(name, sizeof(name), "ext26-%s@%lx", names[i], physical);
