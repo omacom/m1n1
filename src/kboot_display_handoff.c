@@ -218,7 +218,7 @@ struct dcp_soc {
     bool describe;      /* log the ADT values the handoff and the device tree need */
     bool adt_psreg;     /* the display power state is what /arm-io/dcp's ADT clock-gates name */
     bool fw25;          /* exact J613 25G83 profile */
-    bool ext;           /* T6030 dcpextN memory and dispextN DART handoffs */
+    bool ext;           /* dcpextN memory and dispextN DART handoffs (see dcpext6_socs[]) */
     bool board_gate;    /* nothing at all unless chip_id is .chip and the root is one of .boards */
     bool any_uuid;      /* no image pinned: the running image's ADT uuid is published */
     bool log_streams;   /* log the DART stream registers, without the ADT description */
@@ -360,6 +360,7 @@ static const struct dcp_soc dcp_soc_t6031 = {
     .vm_base = DCP6_DART_VM_BASE,
     .vm_size = DCP6_DART_VM_SIZE,
     .pmgr_disp_cpu = 0x2922802a0UL,
+    .ext = true,
 };
 
 static const struct dcp_soc *const dcp_socs[] = {&dcp_soc_t6030, &dcp_soc_t8122, &dcp_soc_t6031};
@@ -2305,11 +2306,13 @@ static __attribute__((noinline)) void dcp6_handoff(void *dt)
  * only if the ADT has it and the device tree describes it (alias dcpext1); otherwise it is
  * skipped and nothing changes. Each
  * handoff is its own transaction, so a refused dcpext1 leaves dcpext0's in place.
+ *
+ * T6031 (M3 Max) has four, dcpext0..3, handed off the same way with the same markers, armed by
+ * asahi,t6031-dcpext and asahi,t6031-dispext (see dcpext6_socs[]).
  */
 #define DCPEXT6_MARKER  "apple,t6030-dcpext-memory-ready"
 #define DCPEXT6_SEGS    4
 #define DISPEXT6_MARKER "apple,t6030-dispext-handoff"
-#define DISPEXT6_PMGR   0x350700000UL /* PMGR base of the dispextN_cpu power states */
 
 struct dcpext6_inst {
     const char *name;     /* log name */
@@ -2327,7 +2330,10 @@ struct dcpext6_inst {
     u64 disp_dart, disp_reg1;
     u32 disp_irq;
     const char *dart_name, *dart_path, *scanout_path;
-    /* The processor's CPU power state: PMGR offset, device tree node and label */
+    /*
+     * The processor's own power state (dispextN_cpu on T6030, dispextN_fe on T6031): PMGR
+     * offset, device tree node and label
+     */
     u32 ps_reg;
     const char *ps_path, *ps_label;
     const char *log; /* prefix of the display DART messages */
@@ -2384,6 +2390,72 @@ static const struct dcpext6_inst dcpext6_insts[] = {
     },
 };
 
+/*
+ * T6031: the J516C ADT's dcpextN, dart-dcpextN and dart-dispextN, translated through /arm-io
+ * ranges. Each processor and its DARTs sit on dispextN_fe (the child of dispextN_cpu) in the
+ * second PMGR, as the internal DCP sits on disp_fe.
+ */
+/* Addresses and power state offsets in bare hex: they also spell the device tree paths. */
+#define T6031_DCPEXT(n, cp, fw, dd, irq, ps)                                                       \
+    {                                                                                              \
+        .name = "dcpext" #n, .alias = "dcpext" #n, .optional = (n) != 0,                           \
+        .adt_dcp = "/arm-io/dcpext" #n, .adt_nub = "/arm-io/dcpext" #n "/iop-dcpext" #n "-nub",    \
+        .adt_dart = "/arm-io/dart-dcpext" #n, .adt_disp = "/arm-io/dart-dispext" #n,               \
+        .resv = "dcpext" #n, .coproc = 0x##cp##UL, .dart = 0x##fw##UL,                            \
+        .dcp_path = "/soc/dcp@" #cp, .disp = "dispext" #n, .disp_dart = 0x##dd##UL,             \
+        .disp_reg1 = 0x##dd##UL - 0x4000, .disp_irq = irq, .dart_name = "iommu@" #dd,         \
+        .dart_path = "/soc/iommu@" #dd, .scanout_path = "/soc/dcp@" #cp "/scanout",             \
+        .ps_reg = 0x##ps, .ps_path = "/soc/power-management@292800000/power-controller@" #ps,     \
+        .ps_label = "dispext" #n "_fe", .log = "dispext" #n ": ",                                \
+    }
+
+static const struct dcpext6_inst dcpext6_insts_t6031[] = {
+    T6031_DCPEXT(0, 306c00000, 30530c000, 305304000, 1047, 4a0),
+    T6031_DCPEXT(1, 44ac00000, 44930c000, 449304000, 1083, 4f0),
+    T6031_DCPEXT(2, 44ec00000, 44d30c000, 44d304000, 1119, 500),
+    T6031_DCPEXT(3, 2cac00000, 2c930c000, 2c9304000, 1155, 480),
+};
+
+/* What differs between the SoCs whose external processors are handed off */
+struct dcpext6_soc {
+    u32 chip;
+    const char *mem_flag, *disp_flag; /* /chosen flags arming the handoffs */
+    u64 pmgr;                         /* PMGR base of the processors' power states */
+    const char *pwrstate_compat;
+    const char *dart_compat; /* the display DART's first compatible, before apple,t8110-dart */
+    u32 aic_cells;           /* #interrupt-cells of the AIC */
+    const struct dcpext6_inst *insts;
+    size_t ninsts;
+};
+
+static const struct dcpext6_soc dcpext6_socs[] = {
+    {
+        .chip = T6030,
+        .mem_flag = "asahi,t6030-dcpext",
+        .disp_flag = "asahi,t6030-dispext",
+        .pmgr = 0x350700000UL,
+        .pwrstate_compat = "apple,t6030-pmgr-pwrstate",
+        .dart_compat = "apple,t6030-dart",
+        .aic_cells = 3,
+        .insts = dcpext6_insts,
+        .ninsts = ARRAY_SIZE(dcpext6_insts),
+    },
+    {
+        .chip = T6031,
+        .mem_flag = "asahi,t6031-dcpext",
+        .disp_flag = "asahi,t6031-dispext",
+        .pmgr = 0x292800000UL,
+        .pwrstate_compat = "apple,t6031-pmgr-pwrstate",
+        .dart_compat = "apple,t6031-dart",
+        .aic_cells = 4,
+        .insts = dcpext6_insts_t6031,
+        .ninsts = ARRAY_SIZE(dcpext6_insts_t6031),
+    },
+};
+
+/* This boot's entry of dcpext6_socs[], set by dcpext6_handoffs() */
+static const struct dcpext6_soc *dcpext6;
+
 static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
 {
     const char *alias = inst->alias;
@@ -2396,7 +2468,7 @@ static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
     int panel = fdt_path_offset(dt, "dcp");
     if (panel < 0 || !fdt_getprop(dt, panel, dcp6.soc->marker, NULL))
         bail("%s needs the validated panel handoff first\n", inst->name);
-    if (chip_id != T6030 || os_firmware.version != V14_7)
+    if (chip_id != dcpext6->chip || os_firmware.version != V14_7)
         return -1;
     if (fdt_getprop(dt, node, "memory-region", NULL) || fdt_getprop(dt, node, DCPEXT6_MARKER, NULL))
         bail("%s already has memory metadata\n", inst->name);
@@ -2421,7 +2493,8 @@ static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
     const char *names = adt_getprop(adt, nub, "segment-names", &nameslen);
     const char *uuid = adt_getprop(adt, nub, "uuid", &uuidlen);
     if (nub < 0 || !ranges || seglen != DCPEXT6_SEGS * sizeof(*ranges) || !names || !uuid ||
-        uuidlen != sizeof(DCP6_UUID) || memcmp(uuid, DCP6_UUID, sizeof(DCP6_UUID)) ||
+        /* The panel's own image: its __TEXT is shared, see below. */
+        uuidlen != strlen(dcp6.uuid) + 1 || memcmp(uuid, dcp6.uuid, uuidlen) ||
         dcp6_adt_u32(nub, "pre-loaded", &loaded) || loaded != 1)
         bail("%s firmware metadata invalid\n", inst->name);
     if (!dcp6_seg_name_is(names, nameslen, 1, "__DATA") ||
@@ -2501,7 +2574,7 @@ static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
     node = fdt_path_offset(dt, path);
     if (node < 0 || fdt_setprop(dt, node, "memory-region", mr, sizeof(mr)) ||
         fdt_setprop(dt, node, "memory-region-names", mr_names, sizeof(mr_names)) ||
-        fdt_setprop_string(dt, node, "apple,firmware-uuid", DCP6_UUID) ||
+        fdt_setprop_string(dt, node, "apple,firmware-uuid", dcp6.uuid) ||
         firmware_set_fdt(dt, node, "apple,firmware-version", &os_firmware) ||
         firmware_set_fdt(dt, node, "apple,firmware-compat", &os_firmware) ||
         fdt_setprop_u32(dt, node, DCPEXT6_MARKER, 1))
@@ -2532,8 +2605,8 @@ struct dispext6_tables {
 static int dispext6_check_inner(const struct dcpext6_inst *inst, struct dispext6_tables *t)
 {
     const u32 sid[2] = {0, 4};
-    /* Do not access the external display aperture unless its CPU domain is on. */
-    if ((read32(DISPEXT6_PMGR + inst->ps_reg) & 0xf0) != 0xf0)
+    /* Do not access the external display aperture unless its power state is on. */
+    if ((read32(dcpext6->pmgr + inst->ps_reg) & 0xf0) != 0xf0)
         return -1;
     if (!(read32(inst->disp_dart + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR))
         return -1;
@@ -2566,7 +2639,7 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
     int a = adt_path_offset(adt, adt_path);
     int ext = fdt_path_offset(dt, ext_path), len;
     const fdt32_t *ready = ext < 0 ? NULL : fdt_getprop(dt, ext, DCPEXT6_MARKER, &len);
-    if (chip_id != T6030 || os_firmware.version != V14_7 || a < 0 || ext < 0 || !ready ||
+    if (chip_id != dcpext6->chip || os_firmware.version != V14_7 || a < 0 || ext < 0 || !ready ||
         len != 4 || fdt32_ld(ready) != 1 || dcp6_status_disabled(dt, ext, inst->alias) ||
         fdt_path_offset(dt, inst->dart_path) != -FDT_ERR_NOTFOUND ||
         fdt_path_offset(dt, inst->scanout_path) != -FDT_ERR_NOTFOUND)
@@ -2603,7 +2676,7 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
     if (parent < 0 || !fdt_getprop(dt, parent, "interrupt-controller", NULL))
         return -1;
     prop = fdt_getprop(dt, parent, "#interrupt-cells", &len);
-    if (!prop || len != 4 || fdt32_ld(prop) != 3)
+    if (!prop || len != 4 || fdt32_ld(prop) != dcpext6->aic_cells)
         return -1;
     prop = fdt_getprop(dt, fw, "power-domains", &len);
     if (!prop || len != 4)
@@ -2615,7 +2688,7 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
         memcmp(label, inst->ps_label, len))
         return -1;
     if (parent != fdt_path_offset(dt, inst->ps_path) ||
-        fdt_node_check_compatible(dt, parent, "apple,t6030-pmgr-pwrstate"))
+        fdt_node_check_compatible(dt, parent, dcpext6->pwrstate_compat))
         return -1;
     prop = fdt_getprop(dt, parent, "#power-domain-cells", &len);
     if (!prop || len != 4 || fdt32_ld(prop))
@@ -2643,18 +2716,28 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
     }
     int soc = fdt_path_offset(dt, "/soc");
     int dart = fdt_add_subnode(dt, soc, inst->dart_name);
-    const char compat[] = "apple,t6030-dart\0apple,t8110-dart";
+    char compat[48];
+    size_t compat_len = strlen(dcpext6->dart_compat) + 1;
+    memcpy(compat, dcpext6->dart_compat, compat_len);
+    memcpy(compat + compat_len, "apple,t8110-dart", sizeof("apple,t8110-dart"));
+    compat_len += sizeof("apple,t8110-dart");
     const char names[] = "sid0-page-tables\0sid4-page-tables";
     fdt64_t reg[] = {cpu_to_fdt64(inst->disp_dart), cpu_to_fdt64(0x4000)};
     fdt64_t range[] = {cpu_to_fdt64(vm_base), cpu_to_fdt64(vm_size)};
-    fdt32_t interrupts[] = {cpu_to_fdt32(0), cpu_to_fdt32(irq), cpu_to_fdt32(4)};
-    if (dart < 0 || fdt_setprop(dt, dart, "compatible", compat, sizeof(compat)) ||
+    /* AIC_IRQ, then the die (T6031's four cells), the number and IRQ_TYPE_LEVEL_HIGH */
+    fdt32_t interrupts[4] = {cpu_to_fdt32(0), cpu_to_fdt32(0), cpu_to_fdt32(irq), cpu_to_fdt32(4)};
+    size_t irq_cells = dcpext6->aic_cells;
+    if (irq_cells == 3) {
+        interrupts[1] = cpu_to_fdt32(irq);
+        interrupts[2] = cpu_to_fdt32(4);
+    }
+    if (dart < 0 || fdt_setprop(dt, dart, "compatible", compat, compat_len) ||
         fdt_setprop_string(dt, dart, "status", "disabled") ||
         fdt_setprop_u32(dt, dart, "#iommu-cells", 1) ||
         fdt_setprop(dt, dart, "reg", reg, sizeof(reg)) ||
         fdt_setprop(dt, dart, "apple,dma-range", range, sizeof(range)) ||
         fdt_setprop_u32(dt, dart, "interrupt-parent", aic) ||
-        fdt_setprop(dt, dart, "interrupts", interrupts, sizeof(interrupts)) ||
+        fdt_setprop(dt, dart, "interrupts", interrupts, irq_cells * sizeof(*interrupts)) ||
         fdt_setprop_u32(dt, dart, "power-domains", pd) ||
         fdt_setprop(dt, dart, "memory-region", mr, sizeof(mr)) ||
         fdt_setprop(dt, dart, "memory-region-names", names, sizeof(names)) ||
@@ -2712,16 +2795,23 @@ static bool dcpext6_present(void *dt, const struct dcpext6_inst *inst)
     return true;
 }
 
-/* dcpext0, then dcpext1; each processor's memory handoff before its display DART handoff */
+/* dcpext0, dcpext1, ...; each processor's memory handoff before its display DART handoff */
 static void dcpext6_handoffs(void *dt)
 {
-    bool disp = dcpext6_flag(dt, "asahi,t6030-dispext");
-    bool mem = disp || dcpext6_flag(dt, "asahi,t6030-dcpext");
+    dcpext6 = NULL;
+    for (size_t i = 0; i < ARRAY_SIZE(dcpext6_socs) && !dcpext6; i++)
+        if (dcpext6_socs[i].chip == dcp6.soc->chip)
+            dcpext6 = &dcpext6_socs[i];
+    if (!dcpext6)
+        return;
+
+    bool disp = dcpext6_flag(dt, dcpext6->disp_flag);
+    bool mem = disp || dcpext6_flag(dt, dcpext6->mem_flag);
 
     if (!mem && !disp)
         return;
-    for (size_t i = 0; i < ARRAY_SIZE(dcpext6_insts); i++) {
-        const struct dcpext6_inst *inst = &dcpext6_insts[i];
+    for (size_t i = 0; i < dcpext6->ninsts; i++) {
+        const struct dcpext6_inst *inst = &dcpext6->insts[i];
         if (inst->optional && !dcpext6_present(dt, inst))
             continue;
         if (mem)
