@@ -76,9 +76,6 @@ BASE_CFLAGS := -O2 -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-P
 CFLAGS := $(BASE_CFLAGS) -mgeneral-regs-only
 
 CFG :=
-ifeq ($(J514C_BRINGUP),1)
-CFG += J514C_BRINGUP
-endif
 ifeq ($(J613_ESP_STAGE1),1)
 ifneq ($(CHAINLOADING),1)
 $(error J613_ESP_STAGE1 requires CHAINLOADING=1)
