@@ -617,7 +617,9 @@ def test_the_j516c_defaults_are_the_switches_the_t6031_entries_read():
     kboot = (ROOT / "src/kboot.c").read_text()
     gpu = (ROOT / "src/kboot_gpu.c").read_text()
     handoff = (ROOT / "src/kboot_display_handoff.c").read_text()
-    assert 'm3_max_boards[] = {"apple,j516c", NULL};' in kboot
+    boards = between(kboot, "static const char *const m3_max_boards[]", "NULL};")
+    assert '"apple,j516c"' in boards
+    assert '#ifdef J514C_BRINGUP\n    "apple,j514c",\n#endif' in boards
     assert 'm3_max_switches[] = {"asahi,t6031-dcp", "asahi,t6031-gpu", NULL};' in kboot
     display = between(handoff, "static const struct dcp_soc dcp_soc_t6031 = {", "};")
     assert '.optin = "asahi,t6031-dcp",' in display and ".board_gate = true," in display
@@ -648,3 +650,29 @@ def test_the_defaults_path_only_edits_the_chosen_table():
         calls = set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", body))
         assert "kboot_delete_chosen" in calls or "dt_drop_m3_defaults" in calls, name
         assert calls <= allowed, (name, calls - allowed)
+
+
+def test_j514c_candidate_build_keeps_exact_board_soc_and_owner_optout(tmp_path):
+    source = harness().split('int main(void)', 1)[0]
+    main = r'''
+int main(void) {
+    RESET(J514C); assert(!run()); expect_only(max, N(max));
+    RESET(J516C); assert(!run()); expect_only(max, N(max));
+    RESET(J514M); assert(!run()); expect_none();
+    RESET(J516M); assert(!run()); expect_none();
+    RESET("apple,j514c\0apple,t6034\0apple,arm-platform");
+    assert(!run()); expect_none();
+    RESET(J514C); assert(!kboot_set_chosen("asahi,t6031-gpu", "0"));
+    assert(!run()); assert(armed("asahi,t6031-dcp"));
+    assert(!armed("asahi,t6031-gpu"));
+    RESET(J514C); assert(!kboot_set_chosen("asahi,m3-defaults", "0"));
+    assert(!run()); assert(!present("asahi,t6031-gpu"));
+    assert(!present("asahi,t6031-dcp"));
+    RESET(J514C); chosen_lost = true; assert(!run()); expect_none();
+    return 0;
+}
+'''
+    run_c(tmp_path, 'j514c-candidate',
+          '#define J514C_BRINGUP 1\n'
+          '#pragma GCC diagnostic ignored "-Wunused-function"\n'
+          '#pragma GCC diagnostic ignored "-Wunused-variable"\n' + source + main)

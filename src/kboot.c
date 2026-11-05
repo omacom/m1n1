@@ -411,7 +411,14 @@ static const char *const m3_air_switches[] = {
     "asahi,t8122-gpu-fuse-leakage", NULL};
 static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
-static const char *const m3_max_boards[] = {"apple,j516c", NULL};
+static const char *const m3_max_boards[] = {
+    "apple,j516c",
+    /* Candidate builds only: the paired kernel requires its explicit J514C
+     * opt-in and retains exact firmware/identity/record checks. No T6034. */
+#ifdef J514C_BRINGUP
+    "apple,j514c",
+#endif
+    NULL};
 static const char *const m3_max_switches[] = {"asahi,t6031-dcp", "asahi,t6031-gpu", NULL};
 static const char *const m3_air_graphics[] = {"asahi,t8122-", "asahi,j613-", "asahi,j615-", NULL};
 static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
