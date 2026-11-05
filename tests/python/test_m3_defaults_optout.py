@@ -438,6 +438,44 @@ def test_no_config_gets_the_whole_air_recipe(tools, build, board):
     assert set(AIR) <= b.armed and b.select == "g15-standin"
 
 
+DCPEXT = "asahi,t8122-dcpext"
+
+
+@pytest.mark.parametrize("build", STAGE2)
+def test_the_j613_gets_its_external_display_by_default(tools, build):
+    b = boot(tools, build, b"")
+    booted(b)
+    assert DCPEXT in b.armed and b.chosen[DCPEXT] == "1"
+
+
+@pytest.mark.parametrize("build", STAGE2)
+def test_the_j615_gets_no_external_display_default(tools, build):
+    b = boot(tools, build, b"", board="j615")
+    booted(b)
+    assert set(AIR) <= b.armed and DCPEXT not in b.chosen
+
+
+@pytest.mark.parametrize("config,lines", [
+    (b"chosen.asahi,t8122-dcpext=0\n", {DCPEXT: "0"}),
+    (b"chosen.asahi,t8122-dcpext=1\nchosen.asahi,t8122-dcpext=0\n", {DCPEXT: "0"}),
+    (b"chosen.asahi,t8122-dcp=0\n", {}),
+    (b"chosen.asahi,m3-defaults=0\n", {}),
+], ids=["dcpext-off", "dcpext-on-then-off", "dcp-off", "master-off"])
+@pytest.mark.parametrize("build", STAGE2)
+def test_j613_owner_lines_keep_the_external_display_off(tools, build, config, lines):
+    b = boot(tools, build, config)
+    booted(b)
+    assert DCPEXT not in b.armed
+    assert {k: v for k, v in b.chosen.items() if k == DCPEXT} == lines
+
+
+@pytest.mark.parametrize("build", STAGE2)
+def test_j613_dcpext_zero_keeps_the_rest_of_the_air_recipe(tools, build):
+    b = boot(tools, build, b"chosen.asahi,t8122-dcpext=0\n")
+    booted(b)
+    assert set(AIR) <= b.armed and b.select == "g15-standin"
+
+
 @pytest.mark.parametrize("board", ["j514s", "j516s"])
 @pytest.mark.parametrize("build", STAGE2)
 def test_the_pro_gets_its_two_defaults(tools, build, board):

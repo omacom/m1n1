@@ -384,8 +384,11 @@ static int dt_set_t8140_wfx_args(int node)
  * (which also passes the PMP values), the GPU, and the stand-in power model with this Mac's
  * leakage fuse. It wrote the GPU lines only beside a display line of 1, so an owner's
  * chosen.asahi,t8122-dcp=0 keeps the default GPU switches off as well; an owner's own GPU line
- * still counts. chosen.asahi,t8122-dcpext stays off. The Pro switches are its display handoff
- * and GPU; its external display handoffs (t6030-dcpext, t6030-dispext) keep their own lines.
+ * still counts. The 13-inch Air (J613) also gets its external display, chosen.asahi,t8122-dcpext,
+ * under the same rule: only beside a display line of 1, and the external display still needs the
+ * internal one handed over (dt_t8122_dcpext_armed()). The 15-inch Air (J615) and the J504 do not get it yet.
+ * The Pro switches are its display handoff and GPU; its external display handoffs
+ * (t6030-dcpext, t6030-dispext) keep their own lines.
  *
  * The J516C switches are its display handoff and GPU, each on its own as on the Pro: an owner's
  * chosen.asahi,t6031-gpu=0 keeps the GPU off and the display default still goes in, and
@@ -403,8 +406,13 @@ struct m3_default_board {
     const char *const *graphics;
 };
 
-/* The M3 MacBook Airs (J613, J615) and the 14" M3 MacBook Pro (J504): one T8122 recipe. */
-static const char *const m3_air_boards[] = {"apple,j613", "apple,j615", "apple,j504", NULL};
+/* The 13-inch M3 Air (J613): the T8122 recipe plus its external display. */
+static const char *const m3_j613_boards[] = {"apple,j613", NULL};
+static const char *const m3_j613_switches[] = {
+    "asahi,t8122-dcp", "asahi,t8122-gpu", "asahi,t8122-gpu-power-standin",
+    "asahi,t8122-gpu-fuse-leakage", "asahi,t8122-dcpext", NULL};
+/* The 15-inch M3 Air (J615) and the 14" M3 MacBook Pro (J504): the T8122 recipe. */
+static const char *const m3_air_boards[] = {"apple,j615", "apple,j504", NULL};
 static const char *const m3_air_switches[] = {
     "asahi,t8122-dcp", "asahi,t8122-gpu", "asahi,t8122-gpu-power-standin",
     "asahi,t8122-gpu-fuse-leakage", NULL};
@@ -417,6 +425,7 @@ static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
 static const char *const m3_max_graphics[] = {"asahi,t6031-", NULL};
 
 static const struct m3_default_board m3_default_boards[] = {
+    {"apple,t8122", m3_j613_boards, m3_j613_switches, true, m3_air_graphics},
     {"apple,t8122", m3_air_boards, m3_air_switches, true, m3_air_graphics},
     {"apple,t6030", m3_pro_boards, m3_pro_switches, false, m3_pro_graphics},
     {"apple,t6031", m3_max_boards, m3_max_switches, false, m3_max_graphics},
@@ -2781,11 +2790,12 @@ static int dt_reserve_t8122_dcpext_one(unsigned int n)
 }
 
 /*
- * T8122: reserve the external DCP firmware for the kernel's gate only with the boot.bin config
- * line chosen.asahi,t8122-dcpext=1, and only when the internal display was handed over
- * (apple,t8122-handoff on dcp), the one case where the kernel would enable it. Off by default:
- * on an M3 Air with 14.x firmware, a published marker lets the kernel enable dcpext, and the
- * internal DCP then crashes after disp0 DART faults, leaving the panel dark.
+ * T8122: reserve the external DCP firmware for the kernel's gate only with
+ * chosen.asahi,t8122-dcpext=1, and only when the internal display was handed over
+ * (apple,t8122-handoff on dcp), the one case where the kernel would enable it. The 13-inch Air
+ * (J613) gets the switch by default (dt_set_m3_defaults()); other boards need the config line.
+ * A kernel older than linux-aurora 7.2.11.aurora15 must not see the marker: it enables dcpext,
+ * and the internal DCP then crashes after disp0 DART faults, leaving the panel dark.
  */
 static bool dt_t8122_dcpext_armed(void)
 {
