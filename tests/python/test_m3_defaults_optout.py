@@ -47,7 +47,7 @@ FAMILY = {"j613": ("asahi,t8122-", "asahi,j613-", "asahi,j615-"),
           "j514s": ("asahi,t6030-",),
           "j516s": ("asahi,t6030-",),
           "j516c": ("asahi,t6031-",)}
-M3_LINES = ("asahi,t8122-", "asahi,t6030-", "asahi,t6031-")
+M3_LINES = ("asahi,t8122-", "asahi,t6030-", "asahi,t6031-", "asahi,t6034-")
 MAX_GPU = "asahi,t6031-gpu"
 MAX_DCP = "asahi,t6031-dcp"
 MAX = {MAX_DCP: "1", MAX_GPU: "1"}      # the J516C defaults
@@ -144,23 +144,26 @@ struct g15_soc { const char *optin; };
 static const struct g15_soc g15_soc_t8122 = {"asahi,t8122-gpu"};
 static const struct g15_soc g15_soc_t8122_standin = {"asahi,t8122-gpu"};
 static const struct g15_soc g15_soc_t6031 = {"asahi,t6031-gpu"};
+static const struct g15_soc g15_soc_t6034 = {"asahi,t6034-gpu"};
 static const char *selected = "none";
 static void t8122_leak_fuse_export(void *d) {}
 static int dt_set_gpu_t8122(void *d) { selected = "reservation-only"; return 0; }
 static int dt_set_gpu_g15(void *d, const struct g15_soc *soc)
 {
     selected = soc == &g15_soc_t8122_standin ? "g15-standin" :
-               soc == &g15_soc_t6031         ? "t6031-g15"   : "g15";
+               soc == &g15_soc_t6031         ? "t6031-g15"   :
+               soc == &g15_soc_t6034         ? "t6034-g15"   : "g15";
     return 0;
 }
 #define T6031 0x6031
+#define T6034 0x6034
 static int chip_id = 0x8122, boot_cpu_idx;
 struct fw_version_info { const char *string; };
 enum { T8122_ID_NOT_RUN };
 struct t8122_powered_identity { int result; };
 static const struct fw_version_info *g15_t6031_fw;
 static struct t8122_powered_identity g15_t6031_id;
-static void g15_disable(void *d) { selected = "t6031-disabled"; }
+static void g15_disable(void *d) { selected = chip_id == T6034 ? "t6034-disabled" : "t6031-disabled"; }
 static const struct fw_version_info *dt_t6031_gpu_image(void *d)
 {
     printf("PROBE t6031-image\n");
@@ -172,10 +175,17 @@ static void t6031_gpu_probe(void *d)
     if (g15_t6031_fw)
         printf("%s\n", g15_t6031_fw->string);
 }
+static int dt_measure_gpu_t6034(void *d)
+{
+    printf("PROBE t6034-identity\n");
+    return 0;
+}
 ''' + function(t6031, "bool t6031_board(const void *dt)\n{") + \
+        function(t6031, "bool t6034_board(const void *dt)\n{") + \
         function(gpu, "static bool g15_optin(") + \
         function(gpu, "static int dt_set_gpu_t8122_select(void *dt)\n{") + \
-        function(gpu, "static int dt_set_gpu_t6031(void *dt)\n{") + r'''
+        function(gpu, "static int dt_set_gpu_t6031(void *dt)\n{") + \
+        function(gpu, "static int dt_set_gpu_t6034(void *dt)\n{") + r'''
 /* kboot's handoff: /chosen as dt_set_chosen() writes it, then what the GPU code would see */
 static void kboot_set_initrd(void *start, size_t size) {}
 static int kboot_prepare_dt(void *fdt)
@@ -195,6 +205,8 @@ static int kboot_prepare_dt(void *fdt)
         assert(!dt_set_gpu_t8122_select(dt));
     if (chip_id == T6031)                     /* dt_set_gpu()'s switch on the chip */
         assert(!dt_set_gpu_t6031(dt));
+    if (chip_id == T6034 && !chosen_lost)
+        assert(!dt_set_gpu_t6034(dt));
     int prop;
     fdt_for_each_property_offset(prop, dt, node) {
         const char *name;
@@ -501,14 +513,14 @@ def test_t6031_owner_lines_are_kept(tools, build, board, config, lines, select):
     assert b.armed & {MAX_DCP, MAX_GPU} == {k for k, v in lines.items() if v == "1"}
 
 
-@pytest.mark.parametrize("board", ["j514m", "j516m", "j293", "j433"])
+@pytest.mark.parametrize("board", ["j516m", "j293", "j433"])
 @pytest.mark.parametrize("build", STAGE2)
 def test_other_maxes_and_macs_get_no_default(tools, build, board):
     b = boot(tools, build, b"", board=board)
     booted(b)
     assert not any(n.startswith(M3_LINES) for n in b.chosen), b.stdout
     assert not b.probes
-    # T6034 has no GPU path; the J433 (M3 iMac) reaches only the T8122 reservations
+    # these boards have no admitted GPU path; the J433 (M3 iMac) reaches only the T8122 reservations
     assert b.select == {"j433": "reservation-only"}.get(board, "none")
 
 
@@ -827,3 +839,21 @@ def test_updater_read_loop_fix_keeps_a_last_line_without_newline(tools):
     b = run(tools, "stage2", image + forwarded)
     booted(b)
     assert b.chosen["asahi,t8122-gpu"] == "0"
+
+
+@pytest.mark.parametrize("build", STAGE2)
+@pytest.mark.parametrize("config,gpu,display", [
+    (b"", True, True),
+    (b"chosen.asahi,t6034-gpu=0\n", False, True),
+    (b"chosen.asahi,t6034-dcp=0\n", True, False),
+    (b"chosen.asahi,m3-defaults=0\n", False, False),
+    (LOST, False, False),
+])
+def test_j514m_defaults_and_owner_choices(tools, build, config, gpu, display):
+    b = boot(tools, build, config, board="j514m")
+    booted(b)
+    assert ("asahi,t6034-gpu" in b.armed) == gpu
+    assert ("asahi,t6034-dcp" in b.armed) == display
+    assert bool(b.probes) == gpu
+    if gpu:
+        assert b.select == "t6034-g15"

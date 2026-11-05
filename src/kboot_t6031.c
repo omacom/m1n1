@@ -18,7 +18,7 @@ bool t6031_board(const void *dt)
             !fdt_node_check_compatible(dt, 0, "apple,j516c"));
 }
 
-/* T6034 measurement is scoped to Eric's J514M, independently of T6031. */
+/* T6034 support is scoped to J514M, independently of T6031. */
 bool t6034_board(const void *dt)
 {
     return chip_id == T6034 && !fdt_node_check_compatible(dt, 0, "apple,t6034") &&
@@ -68,13 +68,14 @@ void dt_t6031_fw_uuids(void *dt)
 {
     char list[ARRAY_SIZE(fw_nubs) * 48];
     int len = 0, found = 0;
-    bool t6031 = t6031_board(dt);
+    bool t6031 = t6031_board(dt), t6034 = t6034_board(dt);
+    const char *property = t6034 ? "asahi,t6034-fw-uuids" : FW_UUIDS_PROP;
 
-    if (!t6031 && !t6032_board(dt))
+    if (!t6031 && !t6034 && !t6032_board(dt))
         return;
-    const char *tag = t6031 ? "T6031" : "T6032";
+    const char *tag = t6034 ? "T6034" : t6031 ? "T6031" : "T6032";
     int chosen = fdt_path_offset(dt, "/chosen");
-    if (chosen < 0 || fdt_getprop(dt, chosen, FW_UUIDS_PROP, NULL))
+    if (chosen < 0 || fdt_getprop(dt, chosen, property, NULL))
         return;
 
     for (size_t i = 0; i < ARRAY_SIZE(fw_nubs); i++) {
@@ -98,11 +99,11 @@ void dt_t6031_fw_uuids(void *dt)
         printf("FDT: %s: firmware image %s=%s\n", tag, fw_nubs[i].owner, value);
     }
 
-    if (fdt_setprop(dt, chosen, FW_UUIDS_PROP, list, len))
-        printf("FDT: %s: could not add /chosen/" FW_UUIDS_PROP "\n", tag);
+    if (fdt_setprop(dt, chosen, property, list, len))
+        printf("FDT: %s: could not add /chosen/%s\n", tag, property);
     else
-        printf("FDT: %s: %d of %d firmware image UUIDs in /chosen/" FW_UUIDS_PROP "\n", tag,
-               found, (int)ARRAY_SIZE(fw_nubs));
+        printf("FDT: %s: %d of %d firmware image UUIDs in /chosen/%s\n", tag,
+               found, (int)ARRAY_SIZE(fw_nubs), property);
 }
 
 #define FACTS_NODE     "asahi,t6031-facts"
@@ -114,8 +115,7 @@ void dt_t6031_fw_uuids(void *dt)
  * No T6032 (J575D) board check here: its 27.0.1 ADT has 20 /arm-io/mcc reg entries (3 header
  * windows, then 8 MCC instances per die), so the 16-entry mcc-reg cap would silently drop the
  * last four die-1 windows, and /arm-io/disp0 does not exist on the Studio (no clock facts).
- * The T6031 ADT's 11 entries all fit; this export stays T6031-boards-only until a consumer
- * needs the T6032 shape.
+ * The T6031 ADT's 11 and T6034 ADT's 9 entries fit; a T6034 gets a separate facts node.
  */
 
 /* disp0's clock ids and the frequency of each in /arm-io clock-frequencies (0: not there) */
