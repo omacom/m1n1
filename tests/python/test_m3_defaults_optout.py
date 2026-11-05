@@ -158,8 +158,8 @@ static int chip_id = 0x8122, boot_cpu_idx;
 struct fw_version_info { const char *string; };
 enum { T8122_ID_NOT_RUN };
 struct t8122_powered_identity { int result; };
-static const struct fw_version_info *g15_t6031_fw;
-static struct t8122_powered_identity g15_t6031_id;
+static const struct fw_version_info *g15_g15c_fw;
+static struct t8122_powered_identity g15_g15c_id;
 static void g15_disable(void *d) { selected = chip_id == T6034 ? "t6034-disabled" : "t6031-disabled"; }
 static const struct fw_version_info *dt_t6031_gpu_image(void *d)
 {
@@ -168,9 +168,9 @@ static const struct fw_version_info *dt_t6031_gpu_image(void *d)
 }
 static void t6031_gpu_probe(void *d)
 {
-    printf("PROBE t6031-identity %d\n", g15_t6031_id.result);
-    if (g15_t6031_fw)
-        printf("%s\n", g15_t6031_fw->string);
+    printf("PROBE t6031-identity %d\n", g15_g15c_id.result);
+    if (g15_g15c_fw)
+        printf("%s\n", g15_g15c_fw->string);
 }
 static int dt_measure_gpu_t6034(void *d)
 {
