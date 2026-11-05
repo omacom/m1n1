@@ -16,6 +16,7 @@
  */
 bool t6031_board(const void *dt);
 bool t6032_board(const void *dt);
+bool t6034_board(const void *dt);
 
 /*
  * /chosen/asahi,t6031-fw-uuids: one "<owner>=<uuid>" string per firmware image iBoot loaded, for
