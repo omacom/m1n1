@@ -163,7 +163,7 @@ int main(void)
     assert(entries() == 2 && defaults() == 2 && chosen_is_default[0] && chosen_is_default[1]);
     assert(slot("asahi,t6031-dcp") == 0 && slot("asahi,t6031-gpu") == 1);
 
-    /* the J514C, the T6034 Maxes, a Max board name on another SoC or none, unknown M3 boards, a
+    /* J514C gets normal defaults; T6034 Maxes, a Max board name on another SoC or none, unknown M3 boards, a
        board without its SoC, M1/M2: untouched */
     RESET(J514C); assert(!run()); expect_only(max, 2);
     UNTOUCHED(J514M);

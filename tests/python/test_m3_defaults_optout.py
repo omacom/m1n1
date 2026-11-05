@@ -517,7 +517,7 @@ def test_other_maxes_and_macs_get_no_default(tools, build, board):
     (b"chosen.asahi,t6031-gpu=1\nchosen.asahi,t6031-dcp=1\n", MAX),
 ], ids=["gpu", "gpu-dcp"])
 @pytest.mark.parametrize("build", STAGE2)
-def test_the_j514c_manual_line_works_as_before(tools, build, config, lines):
+def test_explicit_j514c_enable_lines_match_normal_defaults(tools, build, config, lines):
     b = boot(tools, build, config, board="j514c")
     booted(b)
     assert t6031_lines(b) == lines and b.select == "t6031-g15"
@@ -570,7 +570,7 @@ def test_literal_display_zero_is_the_framebuffer_setting(tools, build):
     assert set(AIR) <= b.armed
 
 
-# ---- a lost line: no graphics on the four boards, and the Mac still boots ----
+# ---- a lost line: no graphics on the supported boards, and the Mac still boots ----
 
 LOSSES = {
     "gpu-on-fillers-lost-gpu-off": lambda build: GPU_ON + fill(build, keep=1) + GPU_OFF,
