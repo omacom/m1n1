@@ -659,6 +659,10 @@ int main(void) {
     RESET(J514C); assert(!kboot_set_chosen("asahi,t6031-gpu", "0"));
     assert(!run()); assert(armed("asahi,t6031-dcp"));
     assert(!armed("asahi,t6031-gpu"));
+    RESET(J514C); assert(!kboot_set_chosen("asahi,t6031-dcp", "0"));
+    assert(!run()); assert(present("asahi,t6031-dcp"));
+    assert(!armed("asahi,t6031-dcp")); assert(armed("asahi,t6031-gpu"));
+    assert(entries() == 2 && defaults() == 1);
     RESET(J514C); assert(!kboot_set_chosen("asahi,m3-defaults", "0"));
     assert(!run()); assert(!present("asahi,t6031-gpu"));
     assert(!present("asahi,t6031-dcp"));

@@ -389,9 +389,9 @@ static int dt_set_t8140_wfx_args(int node)
  * The J516C switches are its display handoff and GPU, each on its own as on the Pro: an owner's
  * chosen.asahi,t6031-gpu=0 keeps the GPU off and the display default still goes in, and
  * chosen.asahi,t6031-dcp=0 the other way round. The kernel decides whether it takes the display
- * over; one that does not leaves it on the boot framebuffer. The J514C (a T6031 board the
- * kernel's GPU driver refuses) and the T6034 Maxes (J514M, J516M) are not touched, nor is any
- * other board.
+ * over; one that does not leaves it on the boot framebuffer. A J514C_BRINGUP=1 build gives
+ * J514C the same two defaults; its paired kernel still requires an explicit bring-up opt-in.
+ * Normal builds leave J514C alone. T6034 Maxes (J514M, J516M) and other boards are untouched.
  */
 struct m3_default_board {
     const char *soc;
@@ -411,12 +411,13 @@ static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
 static const char *const m3_max_boards[] = {
     "apple,j516c",
-    /* Candidate builds only: the paired kernel requires its explicit J514C
-     * opt-in and retains exact firmware/identity/record checks. No T6034. */
+/* Candidate builds only: the paired kernel requires its explicit J514C
+ * opt-in and retains exact firmware/identity/record checks. No T6034. */
 #ifdef J514C_BRINGUP
     "apple,j514c",
 #endif
-    NULL};
+    NULL,
+};
 static const char *const m3_max_switches[] = {"asahi,t6031-dcp", "asahi,t6031-gpu", NULL};
 static const char *const m3_air_graphics[] = {"asahi,t8122-", "asahi,j613-", "asahi,j615-", NULL};
 static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
@@ -5331,8 +5332,8 @@ static int dt_set_display(void)
          * On T8122 it does nothing unless chosen.asahi,t8122-dcp=1; the external DCP firmware is
          * reserved only with chosen.asahi,t8122-dcpext=1 and that handoff. On T6031 it does nothing
          * unless the board is a J514C or J516C, and reserves only __OS_LOG unless
-         * chosen.asahi,t6031-dcp=1 (on a J516C, dt_set_m3_defaults() sets it unless a config line
-         * set it).
+         * chosen.asahi,t6031-dcp=1. dt_set_m3_defaults() supplies it on J516C and, only with
+         * J514C_BRINGUP=1, on J514C; an owner's explicit value always wins.
          */
         ret = dt_set_display_handoff(dt);
         if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))
