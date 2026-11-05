@@ -6571,7 +6571,8 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_display())
         return -1;
-    if (dt_set_gpu(dt))
+    /* A lost owner opt-out must also suppress the T6034 measurement. */
+    if (!(chip_id == T6034 && chosen_lost) && dt_set_gpu(dt))
         return -1;
     if (dt_set_multitouch())
         return -1;
@@ -6644,6 +6645,8 @@ int kboot_prepare_dt(void *fdt)
     if (chip_id == T6031) {
         dt_set_pmp_t6031();
         dt_t6031_fw_uuids(dt);
+        dt_t6031_facts(dt);
+    } else if (chip_id == T6034) {
         dt_t6031_facts(dt);
     } else if (chip_id == T6032) {
         dt_t6031_fw_uuids(dt);

@@ -2714,6 +2714,70 @@ static int dt_set_gpu_t6031(void *dt)
 }
 
 /*
+ * Initial J514M/T6034 measurement: normal boot, no enable parameter. Reuse the
+ * bounded G15C identity probe and exact power restoration; never enable the GPU
+ * or mailbox, allocate GPU regions, or start firmware. The stock kernel remains
+ * unbound. Only normalized identity and firmware-header facts leave m1n1.
+ */
+static int dt_measure_gpu_t6034(void *dt)
+{
+    static const char *node_name = "asahi,t6034-gpu-powered-identity";
+    static const struct t6031_probe_ops ops = {
+        .enable = t6031_probe_enable,
+        .active = t6031_probe_active,
+        .read = t6031_probe_read,
+        .restore = t6031_probe_restore,
+    };
+    struct t6031_probe p;
+    int path[8], gpu;
+    u64 size;
+    if (!t6034_board(dt))
+        return 0;
+    gpu = fdt_path_offset(dt, "gpu");
+    if (gpu < 0 || fdt_node_check_compatible(dt, gpu, "apple,agx-t6034"))
+        return 0;
+    /* Owner opt-outs suppress this too; kboot.c handles a lost config line. */
+    int chosen = fdt_path_offset(dt, "/chosen"), len;
+    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,m3-defaults", &len);
+    if (opt && (len != 2 || opt[0] != '1' || opt[1]))
+        return 0;
+    opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t6034-gpu", &len);
+    if (opt && (len != 2 || opt[0] != '1' || opt[1]))
+        return 0;
+    if (adt_path_offset_trace(adt, "/arm-io/sgx", path) < 0 ||
+        adt_get_reg(adt, path, "reg", 0, &p.sgx_base, &size) < 0 ||
+        p.sgx_base != T6031_SGX_BASE || size < G15_SGX_CORE_MASK + 12 ||
+        t6031_closure_get("/arm-io/sgx", &p.closure) ||
+        t6031_identity_node_named(dt, p.closure.n, node_name) < 0) {
+        printf("FDT: GPU: T6034 measurement prerequisites failed; no power-on\n");
+        return 0;
+    }
+    struct t8122_powered_identity id = t6031_probe_run(&ops, &p);
+    if (t6031_identity_publish_named(dt, &id, &p.closure, node_name))
+        printf("FDT: GPU: T6034 identity publication failed\n");
+    printf("FDT: GPU: T6034 identity result %u, version 0x%x counts 0x%x/0x%x "
+           "masks 0x%x/0x%x/0x%x\n", id.result, id.id_version, id.id_counts_1,
+           id.id_counts_2, id.core_mask[0], id.core_mask[1], id.core_mask[2]);
+    if (id.result == T8122_ID_POWER_OFF_FAILED) {
+        printf("FDT: GPU: T6034 WARNING: power closure restoration failed\n");
+        return 0;
+    }
+    dt_t6031_gpu_image_named(dt, "asahi,t6034-gpu-image");
+    int sgx = adt_path_offset(adt, "/arm-io/sgx");
+    const char *props[] = {"perf-state-count", "gpu-num-perf-states", "perf-state-table-count"};
+    for (size_t i = 0; i < ARRAY_SIZE(props); i++) {
+        u32 value;
+        if (!g15_adt_u32(sgx, props[i], &value)) {
+            chosen = fdt_path_offset(dt, "/chosen");
+            int node = chosen < 0 ? chosen : fdt_subnode_offset(dt, chosen, node_name);
+            if (node >= 0)
+                fdt_setprop_u32(dt, node, props[i], value);
+        }
+    }
+    return 0;
+}
+
+/*
  * Called only after every UAT and firmware reservation passes the existing
  * T8122 handoff checks. Power is voted on solely for bounded ID/core-mask
  * reads, then voted off before Linux starts. Neither GPU nor mailbox is enabled.
@@ -3113,6 +3177,8 @@ int dt_set_gpu(void *dt)
             return dt_set_gpu_g15(dt, &g15_soc_t6030);
         case T6031:
             return dt_set_gpu_t6031(dt);
+        case T6034:
+            return dt_measure_gpu_t6034(dt);
         case T6032:
             /*
              * T6032 (J575D): refused until the firmware ABI exists. Missing pieces, each one a

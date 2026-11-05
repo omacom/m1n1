@@ -18,6 +18,13 @@ bool t6031_board(const void *dt)
             !fdt_node_check_compatible(dt, 0, "apple,j516c"));
 }
 
+/* T6034 measurement is scoped to Eric's J514M, independently of T6031. */
+bool t6034_board(const void *dt)
+{
+    return chip_id == T6034 && !fdt_node_check_compatible(dt, 0, "apple,t6034") &&
+           !fdt_node_check_compatible(dt, 0, "apple,j514m");
+}
+
 /*
  * T6032 (M3 Ultra, Mac Studio J575D): only the firmware image UUID list runs here. The 27.0.1
  * (26A434) ADT has the same iop nubs as T6031's for every owner the list keeps, and the owners
@@ -138,7 +145,9 @@ void dt_t6031_facts(void *dt)
     u32 id[FACTS_CLOCKS], freq[FACTS_CLOCKS];
     int path[8], nmcc = 0;
 
-    if (!t6031_board(dt))
+    bool t6034 = t6034_board(dt);
+    const char *node_name = t6034 ? "asahi,t6034-facts" : FACTS_NODE;
+    if (!t6031_board(dt) && !t6034)
         return;
     int nclk = facts_clocks(id, freq);
     for (int i = 0; i < nclk; i++) {
@@ -156,9 +165,9 @@ void dt_t6031_facts(void *dt)
     }
 
     int chosen = fdt_path_offset(dt, "/chosen");
-    if (chosen < 0 || fdt_subnode_offset(dt, chosen, FACTS_NODE) >= 0)
+    if (chosen < 0 || fdt_subnode_offset(dt, chosen, node_name) >= 0)
         return;
-    int node = fdt_add_subnode(dt, chosen, FACTS_NODE);
+    int node = fdt_add_subnode(dt, chosen, node_name);
     int err = node < 0 || fdt_setprop_u32(dt, node, "schema-version", 1);
     if (!err && nclk)
         err = fdt_setprop(dt, node, "disp0-clock-ids", ids, nclk * sizeof(*ids)) ||
@@ -166,14 +175,14 @@ void dt_t6031_facts(void *dt)
     if (!err && nmcc)
         err = fdt_setprop(dt, node, "mcc-reg", mcc, 2 * nmcc * sizeof(*mcc));
     if (err) {
-        printf("FDT: T6031: could not add /chosen/" FACTS_NODE "\n");
+        printf("FDT: could not add /chosen/%s\n", node_name);
         chosen = fdt_path_offset(dt, "/chosen");
-        node = chosen < 0 ? -1 : fdt_subnode_offset(dt, chosen, FACTS_NODE);
+        node = chosen < 0 ? -1 : fdt_subnode_offset(dt, chosen, node_name);
         if (node >= 0)
             fdt_del_node(dt, node);
         return;
     }
-    printf("FDT: T6031: /chosen/" FACTS_NODE ": %d disp0 clock(s)", nclk);
+    printf("FDT: /chosen/%s: %d disp0 clock(s)", node_name, nclk);
     for (int i = 0; i < nclk; i++)
         printf(" 0x%x=%u Hz", id[i], freq[i]);
     printf(", %d mcc reg window(s)\n", nmcc);
