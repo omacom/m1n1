@@ -2026,7 +2026,7 @@ static const struct g15_soc g15_soc_t8122_standin = {
 
 /*
  * T6031 (M3 Max, G15C), J514C/J516C only, requires chosen.asahi,t6031-gpu=1. Defaults supply
- * it on J516C and, only with J514C_BRINGUP=1, on J514C; an explicit config line always wins.
+ * it on J514C and J516C; an explicit config line always wins.
  * This is the J613 14.x setup with T6031 values, with these differences.
  * - The identity, topology and core masks come from the bounded powered identity read that runs
  *   first (t6031_gpu_probe()), which puts the GPU power closure back exactly as iBoot left it. The
@@ -2691,8 +2691,8 @@ static void t6031_gpu_probe(void *dt)
  * T6031 (J514C/J516C): the firmware image facts, the bounded powered identity read, then the GPU
  * setup (which itself touches no GPU hardware). Each part is fail-soft; all three
  * require chosen.asahi,t6031-gpu=1 because this profile uses unmeasured power stand-ins. On a
- * J516C dt_set_m3_defaults() sets it unless a config line set it (=0 keeps all three off).
- * J514C gets the same default only with J514C_BRINGUP=1; normal builds still need the line.
+ * J514C or J516C dt_set_m3_defaults() sets it unless a config line set it
+ * (=0 keeps all three off).
  */
 static int dt_set_gpu_t6031(void *dt)
 {

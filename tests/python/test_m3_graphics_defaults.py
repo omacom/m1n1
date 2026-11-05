@@ -165,7 +165,7 @@ int main(void)
 
     /* the J514C, the T6034 Maxes, a Max board name on another SoC or none, unknown M3 boards, a
        board without its SoC, M1/M2: untouched */
-    UNTOUCHED(J514C);
+    RESET(J514C); assert(!run()); expect_only(max, 2);
     UNTOUCHED(J514M);
     UNTOUCHED(J433);
     UNTOUCHED("apple,j504\0apple,arm-platform");
@@ -365,7 +365,7 @@ int main(void)
     TREE(J516C); assert(!run());
     expect_only(max, 2); assert(entries() == 2);
     TREE(J514C); assert(!run());
-    expect_none(); assert(entries() == 0);
+    expect_only(max, 2); assert(entries() == 2);
 
     /* an owner's later value for a defaulted switch is theirs and survives */
     RESET("apple,j613\0apple,t8122\0apple,arm-platform");
@@ -395,7 +395,7 @@ int main(void)
     TREE(J613); assert(!run());
     expect_only(air, 4); assert(entries() == 6 && defaults() == 4);
     TREE(J514C); assert(!run());
-    expect_none(); assert(entries() == 2 && defaults() == 0);
+    expect_only(max, 2); assert(entries() == 4 && defaults() == 2);
     TREE(J516M); assert(!run());
     expect_none(); assert(entries() == 2 && defaults() == 0);
     TREE(J516C); assert(!run());
@@ -580,7 +580,7 @@ int main(void)
     assert(kboot_set_chosen("asahi,t6031-dcp", "1") >= 0);
     chosen_lost = true;
     assert(!run());
-    assert(armed("asahi,t6031-gpu") && armed("asahi,t6031-dcp") && entries() == 2);
+    assert(!present("asahi,t6031-gpu") && !present("asahi,t6031-dcp") && entries() == 0);
     RESET(J516M);
     assert(kboot_set_chosen("asahi,t6031-gpu", "1") >= 0);
     chosen_lost = true;
@@ -619,7 +619,9 @@ def test_the_j516c_defaults_are_the_switches_the_t6031_entries_read():
     handoff = (ROOT / "src/kboot_display_handoff.c").read_text()
     boards = between(kboot, "static const char *const m3_max_boards[]", "NULL};")
     assert '"apple,j516c"' in boards
-    assert '#ifdef J514C_BRINGUP\n    "apple,j514c",\n#endif' in boards
+    assert '"apple,j514c"' in boards
+    assert "#ifdef" not in boards
+    assert "J514C_BRINGUP" not in (ROOT / "Makefile").read_text()
     assert 'm3_max_switches[] = {"asahi,t6031-dcp", "asahi,t6031-gpu", NULL};' in kboot
     display = between(handoff, "static const struct dcp_soc dcp_soc_t6031 = {", "};")
     assert '.optin = "asahi,t6031-dcp",' in display and ".board_gate = true," in display
@@ -652,7 +654,7 @@ def test_the_defaults_path_only_edits_the_chosen_table():
         assert calls <= allowed, (name, calls - allowed)
 
 
-def test_j514c_candidate_build_keeps_exact_board_soc_and_owner_optout(tmp_path):
+def test_j514c_normal_build_keeps_exact_board_soc_and_owner_optout(tmp_path):
     source = harness().split('int main(void)', 1)[0]
     main = r'''
 int main(void) {
@@ -676,7 +678,6 @@ int main(void) {
     return 0;
 }
 '''
-    run_c(tmp_path, 'j514c-candidate',
-          '#define J514C_BRINGUP 1\n'
+    run_c(tmp_path, 'j514c-default',
           '#pragma GCC diagnostic ignored "-Wunused-function"\n'
           '#pragma GCC diagnostic ignored "-Wunused-variable"\n' + source + main)
