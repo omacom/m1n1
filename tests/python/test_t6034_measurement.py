@@ -36,7 +36,11 @@ struct t6031_probe { u64 sgx_base; struct t6031_closure closure; };
 static u32 chip_id;
 static int enabled, restored, reads, images, fail_enable, fail_restore, fail_read, bad_window;
 static void *adt;
-''' + identity + ops + pick(helper, 'bool t6034_board(') + r'''
+''' + identity + ops + '''
+static struct t8122_powered_identity g15_g15c_id;
+struct fw_version_info;
+static const struct fw_version_info *g15_g15c_fw;
+''' + pick(helper, 'bool t6034_board(') + r'''
 static int adt_path_offset_trace(void *a, const char *s, int *p) { return 0; }
 static int adt_get_reg(void *a, int *p, const char *s, int n, u64 *base, u64 *size)
 { *base=bad_window ? 1 : T6031_SGX_BASE; *size=0x3fdc000; return 0; }
@@ -55,7 +59,8 @@ static bool t6031_identity_valid(const struct t8122_powered_identity *id) { retu
 static const char *const identity_u32[] = {
  "probe-result", "id-version", "core-mask-0", "core-mask-1", "core-mask-2", "id-counts-1", "id-counts-2" };
 ''' + pick(shared, 'int t6031_identity_node_named(') + definition(shared, 'set_u32') + pick(shared, 'int t6031_identity_publish_named(') + r'''
-static void dt_t6031_gpu_image_named(void *d, const char *n) { images++; }
+static const struct fw_version_info *dt_t6031_gpu_image_named(void *d, const char *n)
+{ images++; return NULL; }
 ''' + definition(gpu, 'dt_measure_gpu_t6034') + r'''
 static unsigned char dt[8192];
 static void reset(const char *board, const char *soc)
@@ -107,3 +112,47 @@ int main(void)
     run_c(tmp_path, 't6034-measurement', code)
     boot = (ROOT / 'src/kboot.c').read_text()
     assert 'if (!(chip_id == T6034 && chosen_lost) && dt_set_gpu(dt))' in boot
+
+def test_normal_t6034_selector_keeps_owner_optouts_before_any_probe(tmp_path):
+    gpu = (ROOT / 'src/kboot_gpu.c').read_text()
+    boards = (ROOT / 'src/kboot_t6031.c').read_text()
+    code = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <string.h>
+#include "libfdt.h"
+#define T6034 0x6034
+static int chip_id=T6034;
+static int probes, setups, disables;
+struct fw_version_info;
+enum { T8122_ID_NOT_RUN };
+struct t8122_powered_identity { int result; };
+static struct t8122_powered_identity g15_g15c_id;
+static const struct fw_version_info *g15_g15c_fw;
+static const struct { const char *optin; } g15_soc_t6034={"asahi,t6034-gpu"};
+static void g15_disable(void *d) { disables++; }
+static int dt_measure_gpu_t6034(void *d) { probes++; return 0; }
+static int dt_set_gpu_g15(void *d,const void *soc) { assert(soc==&g15_soc_t6034);setups++;return 0; }
+''' + pick(boards, 'bool t6034_board(') + pick(gpu, 'static bool g15_optin(') + definition(gpu, 'dt_set_gpu_t6034') + r'''
+int main(void)
+{
+ unsigned char d[2048];assert(!fdt_create_empty_tree(d,sizeof(d)));
+ const char comp[]="apple,j514m\0apple,t6034";
+ assert(!fdt_setprop(d,0,"compatible",comp,sizeof(comp)));
+ int n=fdt_add_subnode(d,0,"chosen");assert(n>=0);
+ assert(!dt_set_gpu_t6034(d));assert(!probes && !setups && disables==1);
+ const char *no[]={"0","","true","01"};
+ for(unsigned i=0;i<sizeof(no)/sizeof(no[0]);i++) {
+  assert(!fdt_setprop_string(d,n,"asahi,t6034-gpu",no[i]));
+  assert(!dt_set_gpu_t6034(d));assert(!probes && !setups);
+ }
+ assert(!fdt_setprop_string(d,n,"asahi,t6034-gpu","1"));
+ assert(!dt_set_gpu_t6034(d));assert(probes==1 && setups==1);
+ chip_id=0x6031;assert(!dt_set_gpu_t6034(d));assert(probes==1 && setups==1);
+ chip_id=T6034;const char wrong[]="apple,j516m\0apple,t6034";
+ assert(!fdt_setprop(d,0,"compatible",wrong,sizeof(wrong)));
+ assert(!dt_set_gpu_t6034(d));assert(probes==1 && setups==1);
+ return 0;
+}
+'''
+    run_c(tmp_path, 't6034-selector', code)
