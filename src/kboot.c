@@ -6566,6 +6566,13 @@ int kboot_prepare_dt(void *fdt)
     if (relocated_from && fdt_add_mem_rsv(dt, relocated_from, SZ_16K))
         bail("FDT: couldn't add reservation for m1n1's old reset vector\n");
 
+    // T6050: stage 1 placed this image away from the base the secondaries' RVBAR
+    // is locked to, and smp.c forwards them from the retired vectors there.
+    u64 rvbar_relay = smp_rvbar_relay();
+    if (chip_id == T6050 && rvbar_relay &&
+        fdt_add_mem_rsv(dt, ALIGN_DOWN(rvbar_relay, SZ_16K), SZ_16K))
+        bail("FDT: couldn't add reservation for the RVBAR relay\n");
+
     if (chip_id == T8140) {
         u64 ro_start, ro_end;
         if (memory_fw_ro_range(&ro_start, &ro_end) != 1)
