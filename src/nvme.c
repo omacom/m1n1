@@ -412,6 +412,10 @@ bool nvme_init(void)
         if (chip_id == T8140 && nvmmu_base == 0x38dcc0000 &&
             nvme_base == 0x3cdcc0000 && nvme_size == 0x10000)
             nvme_size = 0x30000;
+        /* The J714c (T6050) ADT has the same 64 KiB alias; same registers above it. */
+        if (chip_id == T6050 && nvmmu_base == 0x41dcc0000 && nvme_base == 0x45dcc0000 &&
+            nvme_size == 0x10000)
+            nvme_size = 0x30000;
         if (nvmmu_size < NVMMU_TCB_STAT + sizeof(u32) ||
             nvme_size < NVME_DB_LINEAR_IOSQ + sizeof(u32) || nvmmu_base > UINT64_MAX - nvmmu_size ||
             nvme_base > UINT64_MAX - nvme_size ||
