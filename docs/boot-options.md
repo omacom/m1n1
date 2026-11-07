@@ -11,6 +11,18 @@ The boot-argument tokens are matched exactly:
 - `m1n1-debug` selects DebugUSB early and prevents CDC from taking its carrier.
 - `m1n1-proxy` skips Stage 1 payload loading and enters the proxy. It is ignored
   by an ESP-loaded Stage 2, so a deliberately chainloaded Stage 2 can boot.
+- `m1n1.wdt=keep` leaves the SoC watchdog as this m1n1 found it instead of
+  disabling it at start. It is for a chainloading stage that armed the watchdog
+  before starting this one and appends the token to the next stage's boot-args
+  command line: a hang in this m1n1, in the proxy or in a kernel that never
+  takes the watchdog over then resets the machine, and iBoot counts a failed
+  boot, so that stage can boot its fallback. Linux's `apple_wdt` keeps an armed
+  watchdog fed once it probes. m1n1 itself does not feed it, so everything
+  before that, including waiting in the proxy, has to finish within the timeout
+  the earlier stage chose. On T8140 the CDC proxy window then neither
+  re-arms the watchdog for 170 s nor disarms it when the host opens the
+  proxy. Without the token m1n1 disables the watchdog as before. It is honoured by every stage, so it does not belong in the NVRAM
+  boot-args: there it would leave iBoot's watchdog running.
 
 The options may be combined. `m1n1-debug` alone does not request a proxy pause.
 Normal payload failure still follows the existing recovery fallback.

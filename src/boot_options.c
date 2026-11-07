@@ -3,6 +3,7 @@
 
 static bool debug_enabled;
 static bool proxy_requested;
+static bool wdt_keep;
 static bool is_stage1;
 
 static bool boot_space(char c)
@@ -41,6 +42,7 @@ void boot_options_init(const char *line, size_t capacity)
 {
     debug_enabled = boot_option_present(line, capacity, "m1n1-debug");
     proxy_requested = boot_option_present(line, capacity, "m1n1-proxy");
+    wdt_keep = boot_option_present(line, capacity, "m1n1.wdt=keep");
     is_stage1 = true;
 }
 
@@ -57,4 +59,9 @@ void boot_options_set_stage1(bool stage1)
 bool m1n1_proxy_enabled(void)
 {
     return is_stage1 && proxy_requested;
+}
+
+bool m1n1_wdt_keep_enabled(void)
+{
+    return wdt_keep;
 }

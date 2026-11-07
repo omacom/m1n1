@@ -94,7 +94,12 @@ failed:
 
 int usb_cdc_arm_watchdog(void)
 {
-    if (chip_id != T8140 || wdt_arm_seconds(170))
+    if (chip_id != T8140)
+        return -1;
+    /* The earlier stage armed the watchdog and its deadline stands: neither re-arm nor disarm */
+    if (m1n1_wdt_keep_enabled())
+        return 0;
+    if (wdt_arm_seconds(170))
         return -1;
     watchdog_armed = true;
     return 0;
