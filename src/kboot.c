@@ -435,6 +435,12 @@ static const char *kboot_chosen_param(const char *name)
     return NULL;
 }
 
+/* kboot_chosen_param() for the SoC helpers in other files (kboot_n1.c) */
+const char *kboot_get_chosen(const char *name)
+{
+    return kboot_chosen_param(name);
+}
+
 /*
  * A later preparation (the proxy can prepare again, with another device tree or after changing
  * the config) first removes the defaults an earlier one added, so an earlier default never

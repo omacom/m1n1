@@ -195,7 +195,7 @@ OBJECTS := \
 	memory.o memory_asm.o \
 	nvme.o \
 	payload.o \
-	pcie.o \
+	pcie.o pcie_t6050.o \
 	pmgr.o \
 	proxy.o \
 	ringbuffer.o \
