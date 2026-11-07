@@ -218,7 +218,7 @@ struct dcp_soc {
     bool describe;      /* log the ADT values the handoff and the device tree need */
     bool adt_psreg;     /* the display power state is what /arm-io/dcp's ADT clock-gates name */
     bool fw25;          /* exact J613 25G83 profile */
-    bool ext;           /* T6030 dcpextN memory and dispextN DART handoffs */
+    bool ext;           /* dcpextN memory and dispextN DART handoffs (struct dcpext_soc) */
     bool board_gate;    /* nothing at all unless chip_id is .chip and the root is one of .boards */
     bool any_uuid;      /* no image pinned: the running image's ADT uuid is published */
     bool log_streams;   /* log the DART stream registers, without the ADT description */
@@ -363,14 +363,14 @@ static const struct dcp_soc dcp_soc_t6031 = {
 };
 
 /* J514M/T6034: fresh ADT registers and image UUID match this checked layout. */
-static const char *const dcp_boards_t6034[] = {"apple,j514m", NULL};
+static const char *const dcp_boards_t6034[] = {"apple,j514m", "apple,j516m", NULL};
 
 static const struct dcp_soc dcp_soc_t6034 = {
     .name = "T6034",
     .chip = T6034,
     .compat = "apple,t6034",
     .boards = dcp_boards_t6034,
-    .boards_desc = "J514M",
+    .boards_desc = "J514M/J516M",
     .dcp_compat = "apple,t6034-dcp",
     .disp_compat = "apple,t6034-display-subsystem",
     .marker = "apple,t6034-handoff",
@@ -388,6 +388,7 @@ static const struct dcp_soc dcp_soc_t6034 = {
     .vm_base = DCP6_DART_VM_BASE,
     .vm_size = DCP6_DART_VM_SIZE,
     .pmgr_disp_cpu = 0x2922802a0UL,
+    .ext = true, /* dcpext0, opt-in by asahi,t6034-dcpext / -dispext */
 };
 
 static const struct dcp_soc *const dcp_socs[] = {
@@ -2336,11 +2337,15 @@ static __attribute__((noinline)) void dcp6_handoff(void *dt)
  * only if the ADT has it and the device tree describes it (alias dcpext1); otherwise it is
  * skipped and nothing changes. Each
  * handoff is its own transaction, so a refused dcpext1 leaves dcpext0's in place.
+ *
+ * T6034 (J516M): the same handoff for dcpext0 at the T6034 addresses, armed by
+ * asahi,t6034-dcpext / asahi,t6034-dispext. Its ADT nub has the T6030 four-segment layout and
+ * shares the panel's __TEXT. The marker and scanout names stay the T6030 ones: they name the
+ * handoff protocol the kernel checks, not the SoC. What differs per SoC is struct dcpext_soc.
  */
 #define DCPEXT6_MARKER  "apple,t6030-dcpext-memory-ready"
 #define DCPEXT6_SEGS    4
 #define DISPEXT6_MARKER "apple,t6030-dispext-handoff"
-#define DISPEXT6_PMGR   0x350700000UL /* PMGR base of the dispextN_cpu power states */
 
 struct dcpext6_inst {
     const char *name;     /* log name */
@@ -2415,8 +2420,93 @@ static const struct dcpext6_inst dcpext6_insts[] = {
     },
 };
 
+/*
+ * T6034 dcpext0, from the J516M ADT (arm-io ranges applied): the panel's DCP block 0x8000_0000
+ * lower. dart-dispext0 shares interrupt 1047 with dart-dcpext0, as on T6030. DISPEXT0-CPU-V is a
+ * virtual ADT gate; its real CPU power state is DISPEXT0_CPU, PMGR 0x292800000 + 0x4a8.
+ */
+static const struct dcpext6_inst dcpext6_insts_t6034[] = {
+    {
+        .name = "dcpext",
+        .alias = "dcpext0",
+        .adt_dcp = "/arm-io/dcpext0",
+        .adt_nub = "/arm-io/dcpext0/iop-dcpext0-nub",
+        .adt_dart = "/arm-io/dart-dcpext0",
+        .adt_disp = "/arm-io/dart-dispext0",
+        .resv = "dcpext0",
+        .coproc = 0x306c00000UL,
+        .dart = 0x30530c000UL,
+        .dcp_path = "/soc/dcp@306c00000",
+        .disp = "dispext0",
+        .disp_dart = 0x305304000UL,
+        .disp_reg1 = 0x305300000UL,
+        .disp_irq = 1047,
+        .dart_name = "iommu@305304000",
+        .dart_path = "/soc/iommu@305304000",
+        .scanout_path = "/soc/dcp@306c00000/scanout",
+        .ps_reg = 0x4a8,
+        .ps_path = "/soc/power-management@292800000/power-controller@4a8",
+        .ps_label = "dispext0_cpu",
+        .log = "",
+    },
+};
+
+/* What the external handoffs need besides the per-processor addresses */
+struct dcpext_soc {
+    u32 chip;
+    const char *uuid;      /* the external processors' preloaded firmware image */
+    const char *flag_mem;  /* /chosen flag: memory handoff */
+    const char *flag_disp; /* /chosen flag: memory and display DART handoff */
+    u64 pmgr;              /* PMGR base of the dispextN_cpu power states */
+    const char *dart_compat;
+    size_t dart_compat_len; /* including both NULs */
+    const char *pwrstate_compat;
+    const struct dcpext6_inst *insts;
+    size_t ninsts;
+};
+
+static const char dcpext_dart_t6030[] = "apple,t6030-dart\0apple,t8110-dart";
+static const char dcpext_dart_t6031[] = "apple,t6031-dart\0apple,t8110-dart";
+
+static const struct dcpext_soc dcpext_socs[] = {
+    {
+        .chip = T6030,
+        .uuid = DCP6_UUID,
+        .flag_mem = "asahi,t6030-dcpext",
+        .flag_disp = "asahi,t6030-dispext",
+        .pmgr = 0x350700000UL,
+        .dart_compat = dcpext_dart_t6030,
+        .dart_compat_len = sizeof(dcpext_dart_t6030),
+        .pwrstate_compat = "apple,t6030-pmgr-pwrstate",
+        .insts = dcpext6_insts,
+        .ninsts = ARRAY_SIZE(dcpext6_insts),
+    },
+    {
+        .chip = T6034,
+        .uuid = "F493F03E-CC40-3D89-9A08-5F259BA2B246",
+        .flag_mem = "asahi,t6034-dcpext",
+        .flag_disp = "asahi,t6034-dispext",
+        .pmgr = 0x292800000UL,
+        .dart_compat = dcpext_dart_t6031,
+        .dart_compat_len = sizeof(dcpext_dart_t6031),
+        .pwrstate_compat = "apple,t6031-pmgr-pwrstate",
+        .insts = dcpext6_insts_t6034,
+        .ninsts = ARRAY_SIZE(dcpext6_insts_t6034),
+    },
+};
+
+/* The external handoff profile of the running SoC, or NULL */
+static const struct dcpext_soc *dcpext_soc(void)
+{
+    for (size_t i = 0; i < ARRAY_SIZE(dcpext_socs); i++)
+        if (dcpext_socs[i].chip == chip_id && dcp6.soc && dcp6.soc->chip == chip_id)
+            return &dcpext_socs[i];
+    return NULL;
+}
+
 static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
 {
+    const struct dcpext_soc *xs = dcpext_soc();
     const char *alias = inst->alias;
     const u32 flags[DCPEXT6_SEGS] = {SEG_FLAGS_TEXT, SEG_FLAGS_DATA, SEG_FLAGS_OSLOG,
                                      SEG_FLAGS_HEAP};
@@ -2427,7 +2517,7 @@ static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
     int panel = fdt_path_offset(dt, "dcp");
     if (panel < 0 || !fdt_getprop(dt, panel, dcp6.soc->marker, NULL))
         bail("%s needs the validated panel handoff first\n", inst->name);
-    if (chip_id != T6030 || os_firmware.version != V14_7)
+    if (!xs || os_firmware.version != V14_7)
         return -1;
     if (fdt_getprop(dt, node, "memory-region", NULL) || fdt_getprop(dt, node, DCPEXT6_MARKER, NULL))
         bail("%s already has memory metadata\n", inst->name);
@@ -2452,7 +2542,7 @@ static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
     const char *names = adt_getprop(adt, nub, "segment-names", &nameslen);
     const char *uuid = adt_getprop(adt, nub, "uuid", &uuidlen);
     if (nub < 0 || !ranges || seglen != DCPEXT6_SEGS * sizeof(*ranges) || !names || !uuid ||
-        uuidlen != sizeof(DCP6_UUID) || memcmp(uuid, DCP6_UUID, sizeof(DCP6_UUID)) ||
+        uuidlen != strlen(xs->uuid) + 1 || memcmp(uuid, xs->uuid, uuidlen) ||
         dcp6_adt_u32(nub, "pre-loaded", &loaded) || loaded != 1)
         bail("%s firmware metadata invalid\n", inst->name);
     if (!dcp6_seg_name_is(names, nameslen, 1, "__DATA") ||
@@ -2532,7 +2622,7 @@ static int dcpext6_publish(void *dt, const struct dcpext6_inst *inst)
     node = fdt_path_offset(dt, path);
     if (node < 0 || fdt_setprop(dt, node, "memory-region", mr, sizeof(mr)) ||
         fdt_setprop(dt, node, "memory-region-names", mr_names, sizeof(mr_names)) ||
-        fdt_setprop_string(dt, node, "apple,firmware-uuid", DCP6_UUID) ||
+        fdt_setprop_string(dt, node, "apple,firmware-uuid", xs->uuid) ||
         firmware_set_fdt(dt, node, "apple,firmware-version", &os_firmware) ||
         firmware_set_fdt(dt, node, "apple,firmware-compat", &os_firmware) ||
         fdt_setprop_u32(dt, node, DCPEXT6_MARKER, 1))
@@ -2564,7 +2654,7 @@ static int dispext6_check_inner(const struct dcpext6_inst *inst, struct dispext6
 {
     const u32 sid[2] = {0, 4};
     /* Do not access the external display aperture unless its CPU domain is on. */
-    if ((read32(DISPEXT6_PMGR + inst->ps_reg) & 0xf0) != 0xf0)
+    if ((read32(dcpext_soc()->pmgr + inst->ps_reg) & 0xf0) != 0xf0)
         return -1;
     if (!(read32(inst->disp_dart + DART_T8110_PROTECT) & DART_T8110_PROTECT_TTBR_TCR))
         return -1;
@@ -2588,6 +2678,7 @@ static int dispext6_check_inner(const struct dcpext6_inst *inst, struct dispext6
 
 static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
 {
+    const struct dcpext_soc *xs = dcpext_soc();
     struct dispext6_tables t;
     const char *adt_path = inst->adt_disp;
     const char *pt_names[2] = {"pt-region-0", "pt-region-4"};
@@ -2597,7 +2688,7 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
     int a = adt_path_offset(adt, adt_path);
     int ext = fdt_path_offset(dt, ext_path), len;
     const fdt32_t *ready = ext < 0 ? NULL : fdt_getprop(dt, ext, DCPEXT6_MARKER, &len);
-    if (chip_id != T6030 || os_firmware.version != V14_7 || a < 0 || ext < 0 || !ready ||
+    if (!xs || os_firmware.version != V14_7 || a < 0 || ext < 0 || !ready ||
         len != 4 || fdt32_ld(ready) != 1 || dcp6_status_disabled(dt, ext, inst->alias) ||
         fdt_path_offset(dt, inst->dart_path) != -FDT_ERR_NOTFOUND ||
         fdt_path_offset(dt, inst->scanout_path) != -FDT_ERR_NOTFOUND)
@@ -2633,9 +2724,11 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
     int parent = fdt_node_offset_by_phandle(dt, aic);
     if (parent < 0 || !fdt_getprop(dt, parent, "interrupt-controller", NULL))
         return -1;
+    /* 3 cells (T6030: type, irq, flags) or 4 (T6031/T6034 multi-die: type, die, irq, flags) */
     prop = fdt_getprop(dt, parent, "#interrupt-cells", &len);
-    if (!prop || len != 4 || fdt32_ld(prop) != 3)
+    if (!prop || len != 4 || (fdt32_ld(prop) != 3 && fdt32_ld(prop) != 4))
         return -1;
+    u32 irq_cells = fdt32_ld(prop);
     prop = fdt_getprop(dt, fw, "power-domains", &len);
     if (!prop || len != 4)
         return -1;
@@ -2646,7 +2739,7 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
         memcmp(label, inst->ps_label, len))
         return -1;
     if (parent != fdt_path_offset(dt, inst->ps_path) ||
-        fdt_node_check_compatible(dt, parent, "apple,t6030-pmgr-pwrstate"))
+        fdt_node_check_compatible(dt, parent, xs->pwrstate_compat))
         return -1;
     prop = fdt_getprop(dt, parent, "#power-domain-cells", &len);
     if (!prop || len != 4 || fdt32_ld(prop))
@@ -2674,18 +2767,23 @@ static int dispext6_publish(void *dt, const struct dcpext6_inst *inst)
     }
     int soc = fdt_path_offset(dt, "/soc");
     int dart = fdt_add_subnode(dt, soc, inst->dart_name);
-    const char compat[] = "apple,t6030-dart\0apple,t8110-dart";
     const char names[] = "sid0-page-tables\0sid4-page-tables";
     fdt64_t reg[] = {cpu_to_fdt64(inst->disp_dart), cpu_to_fdt64(0x4000)};
     fdt64_t range[] = {cpu_to_fdt64(vm_base), cpu_to_fdt64(vm_size)};
-    fdt32_t interrupts[] = {cpu_to_fdt32(0), cpu_to_fdt32(irq), cpu_to_fdt32(4)};
-    if (dart < 0 || fdt_setprop(dt, dart, "compatible", compat, sizeof(compat)) ||
+    fdt32_t interrupts[4];
+    int nirq = 0;
+    interrupts[nirq++] = cpu_to_fdt32(0); /* AIC_IRQ */
+    if (irq_cells == 4)
+        interrupts[nirq++] = cpu_to_fdt32(0); /* die 0 */
+    interrupts[nirq++] = cpu_to_fdt32(irq);
+    interrupts[nirq++] = cpu_to_fdt32(4); /* IRQ_TYPE_LEVEL_HIGH */
+    if (dart < 0 || fdt_setprop(dt, dart, "compatible", xs->dart_compat, xs->dart_compat_len) ||
         fdt_setprop_string(dt, dart, "status", "disabled") ||
         fdt_setprop_u32(dt, dart, "#iommu-cells", 1) ||
         fdt_setprop(dt, dart, "reg", reg, sizeof(reg)) ||
         fdt_setprop(dt, dart, "apple,dma-range", range, sizeof(range)) ||
         fdt_setprop_u32(dt, dart, "interrupt-parent", aic) ||
-        fdt_setprop(dt, dart, "interrupts", interrupts, sizeof(interrupts)) ||
+        fdt_setprop(dt, dart, "interrupts", interrupts, nirq * sizeof(fdt32_t)) ||
         fdt_setprop_u32(dt, dart, "power-domains", pd) ||
         fdt_setprop(dt, dart, "memory-region", mr, sizeof(mr)) ||
         fdt_setprop(dt, dart, "memory-region-names", names, sizeof(names)) ||
@@ -2746,13 +2844,16 @@ static bool dcpext6_present(void *dt, const struct dcpext6_inst *inst)
 /* dcpext0, then dcpext1; each processor's memory handoff before its display DART handoff */
 static void dcpext6_handoffs(void *dt)
 {
-    bool disp = dcpext6_flag(dt, "asahi,t6030-dispext");
-    bool mem = disp || dcpext6_flag(dt, "asahi,t6030-dcpext");
+    const struct dcpext_soc *xs = dcpext_soc();
+    if (!xs)
+        return;
+    bool disp = dcpext6_flag(dt, xs->flag_disp);
+    bool mem = disp || dcpext6_flag(dt, xs->flag_mem);
 
     if (!mem && !disp)
         return;
-    for (size_t i = 0; i < ARRAY_SIZE(dcpext6_insts); i++) {
-        const struct dcpext6_inst *inst = &dcpext6_insts[i];
+    for (size_t i = 0; i < xs->ninsts; i++) {
+        const struct dcpext6_inst *inst = &xs->insts[i];
         if (inst->optional && !dcpext6_present(dt, inst))
             continue;
         if (mem)

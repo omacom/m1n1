@@ -161,11 +161,12 @@ int main(void)
     assert(entries() == 2 && defaults() == 2 && chosen_is_default[0] && chosen_is_default[1]);
     assert(slot("asahi,t6031-dcp") == 0 && slot("asahi,t6031-gpu") == 1);
 
-    /* J514C and J514M get independent defaults; other Maxes, mismatched roots, unknown boards, a
-       board without its SoC, M1/M2: untouched */
+    /* J514C, J514M and J516M get independent defaults; other Maxes, mismatched roots, unknown
+       boards, a board without its SoC, M1/M2: untouched */
     RESET(J514C); assert(!run()); expect_only(max, 2);
     RESET(J514M); assert(!run()); expect_only(max14, 2);
-    UNTOUCHED(J516M);
+    RESET(J516M); assert(!run()); expect_only(max14, 2);
+    UNTOUCHED("apple,j999\0apple,t6034\0apple,arm-platform");
     UNTOUCHED("apple,j516c\0apple,t6034\0apple,arm-platform");
     UNTOUCHED("apple,j516c\0apple,arm-platform");
     UNTOUCHED("apple,j516s\0apple,t6031\0apple,arm-platform");
@@ -391,7 +392,7 @@ int main(void)
     expect_only(air, 4); assert(entries() == 6 && defaults() == 4);
     TREE(J514C); assert(!run());
     expect_only(max, 2); assert(entries() == 4 && defaults() == 2);
-    TREE(J516M); assert(!run());
+    TREE("apple,j999\0apple,t6034\0apple,arm-platform"); assert(!run());
     expect_none(); assert(entries() == 2 && defaults() == 0);
     TREE(J516C); assert(!run());
     expect_only(max, 2); assert(entries() == 4 && defaults() == 2);
@@ -576,7 +577,7 @@ int main(void)
     chosen_lost = true;
     assert(!run());
     assert(!present("asahi,t6031-gpu") && !present("asahi,t6031-dcp") && entries() == 0);
-    RESET(J516M);
+    RESET("apple,j999\0apple,t6034\0apple,arm-platform");
     assert(kboot_set_chosen("asahi,t6031-gpu", "1") >= 0);
     chosen_lost = true;
     assert(!run());
@@ -656,7 +657,7 @@ int main(void) {
     RESET(J514C); assert(!run()); expect_only(max, N(max));
     RESET(J516C); assert(!run()); expect_only(max, N(max));
     RESET(J514M); assert(!run()); expect_only(max14, N(max14));
-    RESET(J516M); assert(!run()); expect_none();
+    RESET(J516M); assert(!run()); expect_only(max14, N(max14));
     RESET("apple,j514c\0apple,t6034\0apple,arm-platform");
     assert(!run()); expect_none();
     RESET(J514C); assert(!kboot_set_chosen("asahi,t6031-gpu", "0"));
@@ -683,9 +684,15 @@ def test_j514m_normal_build_and_independent_owner_optouts(tmp_path):
     main = r'''
 int main(void) {
     RESET(J514M); assert(!run()); expect_only(max14, N(max14));
-    RESET(J516M); assert(!run()); expect_none();
+    RESET(J516M); assert(!run()); expect_only(max14, N(max14));
     RESET("apple,j514m\0apple,t6031\0apple,arm-platform");
     assert(!run()); expect_none();
+    RESET("apple,j516m\0apple,t6031\0apple,arm-platform");
+    assert(!run()); expect_none();
+    RESET(J516M); assert(!kboot_set_chosen("asahi,t6034-gpu", "0"));
+    assert(!run()); assert(armed("asahi,t6034-dcp") && !armed("asahi,t6034-gpu"));
+    RESET(J516M); assert(!kboot_set_chosen("asahi,t6034-dcp", "0"));
+    assert(!run()); assert(!armed("asahi,t6034-dcp") && armed("asahi,t6034-gpu"));
     RESET(J514M); assert(!kboot_set_chosen("asahi,t6034-gpu", "0"));
     assert(!run()); assert(armed("asahi,t6034-dcp") && !armed("asahi,t6034-gpu"));
     RESET(J514M); assert(!kboot_set_chosen("asahi,t6034-dcp", "0"));
