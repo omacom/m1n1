@@ -363,14 +363,14 @@ static const struct dcp_soc dcp_soc_t6031 = {
 };
 
 /* J514M/T6034: fresh ADT registers and image UUID match this checked layout. */
-static const char *const dcp_boards_t6034[] = {"apple,j514m", NULL};
+static const char *const dcp_boards_t6034[] = {"apple,j514m", "apple,j516m", NULL};
 
 static const struct dcp_soc dcp_soc_t6034 = {
     .name = "T6034",
     .chip = T6034,
     .compat = "apple,t6034",
     .boards = dcp_boards_t6034,
-    .boards_desc = "J514M",
+    .boards_desc = "J514M/J516M",
     .dcp_compat = "apple,t6034-dcp",
     .disp_compat = "apple,t6034-display-subsystem",
     .marker = "apple,t6034-handoff",
