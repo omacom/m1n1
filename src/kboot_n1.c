@@ -22,8 +22,10 @@
  *    not up takes an SError.
  * The MAC addresses travel through the wifi0/bluetooth0 aliases (dt_set_mac_addresses()).
  * With chosen.asahi,t6050-n1=1 in the payload variables, apcie0 port 0 is first trained from cold
- * (pcie_t6050.c); =2 also releases the N1's reset through the SMC before the training. Without
- * the variable nothing here trains a link, and a port that is not up stays disabled.
+ * (pcie_t6050.c); =2 also releases the N1's reset through the SMC before the training. =3 and =4
+ * are =1 and =2 with ANS started for the storage checks and stopped again after, for a stage-1 that
+ * leaves ANS stopped. Without the variable nothing here trains a link, and a port that is not up
+ * stays disabled.
  */
 
 #include "kboot_n1.h"
@@ -275,10 +277,12 @@ int kboot_setup_n1(void *dt)
     /* A port 0 training that stopped keeps port 0 down, even with a link up */
     bool port0_failed = false;
     const char *train = kboot_get_chosen("asahi,t6050-n1");
-    if (train && (!strcmp(train, "1") || !strcmp(train, "2"))) {
-        printf("n1: chosen.asahi,t6050-n1=%s: training apcie0 port 0%s\n", train,
-               train[0] == '2' ? " after the SMC reset release" : "");
-        int ret = pcie_t6050_n1_train(train[0] == '2');
+    int mode = train && train[0] >= '1' && train[0] <= '4' && !train[1] ? train[0] - '0' : 0;
+    if (mode) {
+        bool smc = mode == 2 || mode == 4;
+        printf("n1: chosen.asahi,t6050-n1=%s: training apcie0 port 0%s%s\n", train,
+               mode >= 3 ? " with ANS started" : "", smc ? " after the SMC reset release" : "");
+        int ret = mode >= 3 ? pcie_t6050_n1_train_ans(smc) : pcie_t6050_n1_train(smc);
         if (ret == N1_STORAGE_LOST)
             pcie_t6050_storage_lost("during the port 0 training");
         if (ret) {

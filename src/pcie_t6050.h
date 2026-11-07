@@ -14,6 +14,12 @@
  */
 int pcie_t6050_n1_train(bool smc_release);
 
+/*
+ * The same with ANS started for the storage checks and stopped again after, if it was stopped
+ * (chosen.asahi,t6050-n1=3|4); with ANS running, the same as pcie_t6050_n1_train().
+ */
+int pcie_t6050_n1_train_ans(bool smc_release);
+
 /* Storage is in doubt and Linux could not mount its root: reset, so iBoot counts a failed boot */
 void __attribute__((noreturn)) pcie_t6050_storage_lost(const char *why);
 
