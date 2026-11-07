@@ -24,6 +24,21 @@ struct dcpext6_inst { bool optional; const char *alias; };
 static const struct dcpext6_inst dcpext6_insts[] = {
     {false, "dcpext0"}, {true, "dcpext1"},
 };
+/* The per-SoC profile: T6030's flags and processors, T6034's flags, or none. */
+struct dcpext_soc {
+    const char *flag_mem, *flag_disp;
+    const struct dcpext6_inst *insts;
+    size_t ninsts;
+};
+static const struct dcpext_soc soc_t6030 = {"asahi,t6030-dcpext", "asahi,t6030-dispext",
+                                            dcpext6_insts, ARRAY_SIZE(dcpext6_insts)};
+static const struct dcpext_soc soc_t6034 = {"asahi,t6034-dcpext", "asahi,t6034-dispext",
+                                            dcpext6_insts, 1};
+static const struct dcpext_soc *running = &soc_t6030;
+static const struct dcpext_soc *dcpext_soc(void)
+{
+    return running;
+}
 static unsigned char blob[8192];
 static void *dt = blob;
 static int reject_memory, calls[4], ncalls;
@@ -99,6 +114,22 @@ int main(void)
     assert(has("dcpext1", "display-ready"));
     world(NULL, "1", true, 1);
     assert(has("dcpext0", "display-ready") && !has("dcpext1", "display-ready"));
+    /* T6034 reads only its own flags and hands off only its own processors */
+    running = &soc_t6034;
+    world("1", "1", true, -1);
+    assert(ncalls == 0);
+    {
+        int chosen = fdt_path_offset(dt, "/chosen");
+        assert(!fdt_setprop_string(dt, chosen, "asahi,t6034-dispext", "1"));
+        ncalls = 0;
+        dcpext6_handoffs(dt);
+        assert(ncalls == 2 && calls[0] == 0 && calls[1] == 1);
+        assert(has("dcpext0", "display-ready") && !has("dcpext1", "memory-ready"));
+    }
+    /* a SoC without external processors hands nothing off */
+    running = NULL;
+    world("1", "1", true, -1);
+    assert(ncalls == 0);
     return 0;
 }
 ''')
