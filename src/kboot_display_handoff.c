@@ -392,6 +392,35 @@ static const struct dcp_soc dcp_soc_t6034 = {
     .pmgr_disp_cpu = 0x2922802a0UL,
 };
 
+/* J516M retains its tested T6031 display handoff and explicit opt-in. */
+static const char *const dcp_boards_j516m[] = {"apple,j516m", NULL};
+
+static const struct dcp_soc dcp_soc_j516m = {
+    .name = "T6034",
+    .chip = T6034,
+    .compat = "apple,t6034",
+    .boards = dcp_boards_j516m,
+    .boards_desc = "J516M",
+    .dcp_compat = "apple,t6031-dcp",
+    .disp_compat = "apple,t6031-display-subsystem",
+    .marker = "apple,t6031-handoff",
+    .optin = "asahi,t6034-dcp",
+    .oslog_always = true,
+    .adt_psreg = true,
+    .board_gate = true,
+    .uuid = "F493F03E-CC40-3D89-9A08-5F259BA2B246",
+    .log_streams = true,
+    .os_fw = V14_7,
+    .os_fw_name = "14.7",
+    .coproc = 0x386c00000UL,
+    .dart_dcp = 0x38530c000UL,
+    .dart_disp = 0x385304000UL,
+    .vm_base = DCP6_DART_VM_BASE,
+    .vm_size = DCP6_DART_VM_SIZE,
+    .pmgr_disp_cpu = 0x2922802a0UL,
+    .ext = true,
+};
+
 static const struct dcp_soc *const dcp_socs[] = {
     &dcp_soc_t6030, &dcp_soc_t8122, &dcp_soc_t6031, &dcp_soc_t6034};
 
@@ -2483,6 +2512,17 @@ static const struct dcpext6_soc dcpext6_socs[] = {
         .insts = dcpext6_insts_t6031,
         .ninsts = ARRAY_SIZE(dcpext6_insts_t6031),
     },
+    {
+        .chip = T6034,
+        .mem_flag = "asahi,t6034-dcpext",
+        .disp_flag = "asahi,t6034-dispext",
+        .pmgr = 0x292800000UL,
+        .pwrstate_compat = "apple,t6031-pmgr-pwrstate",
+        .dart_compat = "apple,t6031-dart",
+        .aic_cells = 4,
+        .insts = dcpext6_insts_t6031,
+        .ninsts = ARRAY_SIZE(dcpext6_insts_t6031),
+    },
 };
 
 /* This boot's entry of dcpext6_socs[], set by dcpext6_handoffs() */
@@ -2857,6 +2897,11 @@ static void dcpext6_handoffs(void *dt)
 int dt_set_display_handoff(void *dt)
 {
     memset(&dcp6, 0, sizeof(dcp6));
+
+    /* Both Max variants share a SoC compatible; select the exact J516M first. */
+    if (chip_id == T6034 && !fdt_node_check_compatible(dt, 0, "apple,t6034") &&
+        !fdt_node_check_compatible(dt, 0, "apple,j516m"))
+        dcp6.soc = &dcp_soc_j516m;
 
     for (size_t i = 0; i < ARRAY_SIZE(dcp_socs) && !dcp6.soc; i++)
         if (!fdt_node_check_compatible(dt, 0, dcp_socs[i]->compat))

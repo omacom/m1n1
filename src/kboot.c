@@ -5324,7 +5324,7 @@ static int dt_set_display(void)
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") ||
                !fdt_node_check_compatible(dt, 0, "apple,t8122") ||
                !fdt_node_check_compatible(dt, 0, "apple,t6031") ||
-               t6034_board(dt)) {
+               (t6034_board(dt) || j516m_board(dt))) {
         /*
          * Fail-soft handoff (kboot_display_handoff.c): it always returns 0, never uses the
          * helpers above (they bail out of kboot or enable nodes) and never enables a node.
@@ -5598,10 +5598,17 @@ static const struct pmp_values_soc pmp_values_t6034 = {
     "apple,t6034", "asahi,t6034-pmp", "T6034", {1181, 1180, 1183, 1182}, 0x290300000, 0x4000,
 };
 
+/* J516M uses the same measured layout and its established T6031 namespace. */
+static const struct pmp_values_soc pmp_values_j516m = {
+    "apple,t6034", "asahi,t6031-pmp", "T6034", {1181, 1180, 1183, 1182}, 0x290300000, 0x4000,
+};
+
 static int dt_set_pmp_t6034(void)
 {
     if (t6034_board(dt))
         dt_pass_pmp(&pmp_values_t6034);
+    else if (j516m_board(dt))
+        dt_pass_pmp(&pmp_values_j516m);
     return 0;
 }
 
