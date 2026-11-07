@@ -93,7 +93,7 @@ int main(void)
   assert(result()==(fault==0 ? T8122_ID_POWER_FAILED : fault==1 ? T8122_ID_READ_FAULT : T8122_ID_POWER_OFF_FAILED));
   assert(reads==(fault==0 ? 0 : 6));stays_disabled();
  }
- const char *bad_board[]={"apple,j516m","apple,j514c","apple,j999"};
+ const char *bad_board[]={"apple,j514c","apple,j516c","apple,j999"};
  for(unsigned i=0;i<ARRAY_SIZE(bad_board);i++) {
   reset(bad_board[i],"apple,t6034");assert(!dt_measure_gpu_t6034(dt));assert(!enabled && !reads && !images);
  }
@@ -149,7 +149,7 @@ int main(void)
  assert(!fdt_setprop_string(d,n,"asahi,t6034-gpu","1"));
  assert(!dt_set_gpu_t6034(d));assert(probes==1 && setups==1);
  chip_id=0x6031;assert(!dt_set_gpu_t6034(d));assert(probes==1 && setups==1);
- chip_id=T6034;const char wrong[]="apple,j516m\0apple,t6034";
+ chip_id=T6034;const char wrong[]="apple,j999\0apple,t6034";
  assert(!fdt_setprop(d,0,"compatible",wrong,sizeof(wrong)));
  assert(!dt_set_gpu_t6034(d));assert(probes==1 && setups==1);
  return 0;

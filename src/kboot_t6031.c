@@ -18,11 +18,12 @@ bool t6031_board(const void *dt)
             !fdt_node_check_compatible(dt, 0, "apple,j516c"));
 }
 
-/* T6034 support is scoped to J514M, independently of T6031. */
+/* T6034 support is scoped to J514M and J516M, independently of T6031. */
 bool t6034_board(const void *dt)
 {
     return chip_id == T6034 && !fdt_node_check_compatible(dt, 0, "apple,t6034") &&
-           !fdt_node_check_compatible(dt, 0, "apple,j514m");
+           (!fdt_node_check_compatible(dt, 0, "apple,j514m") ||
+            !fdt_node_check_compatible(dt, 0, "apple,j516m"));
 }
 
 /*
