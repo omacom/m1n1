@@ -403,8 +403,11 @@ int payload_run(void)
 
 #ifndef ESP_STAGE2
     if (!stage1_config_applied) {
-        /* With boot= the embedded config only sets the proxy window: no chainload target. */
-        const char *target = boot_spec ? NULL : stage1_config_target();
+        /*
+         * With boot= or an appended kernel (U-Boot) the embedded config only sets the proxy
+         * window: no chainload target.
+         */
+        const char *target = (boot_spec || kernel) ? NULL : stage1_config_target();
         if (target) {
             if (chainload_spec && strcmp(chainload_spec, target)) {
                 printf("Payload: embedded and appended chainload targets differ\n");
