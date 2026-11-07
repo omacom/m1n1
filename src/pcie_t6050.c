@@ -16,8 +16,9 @@
  * first unexpected value stops with no cleanup (a reboot is the cleanup). Storage (ANS, NVMe, its
  * SART and power) is snapshotted before and compared after each stage that touches shared state.
  *
- * Only run when the payload sets chosen.asahi,t6050-n1=1 (or =2 with the SMC release):
- * unmeasured on J716s.
+ * Only run when the payload sets chosen.asahi,t6050-n1. On the J716s, =4 (ANS started, SMC pulse)
+ * brings the link up at Gen1 x1 with the N1 at 01:00.0; without the SMC pulse the link did not
+ * come up within 500 ms (the N1 stays in reset).
  *
  * =3 (=4 with the SMC release) is for a boot chain whose chainloading stage-1 reads the ESP and
  * then stops ANS, so this stage finds it stopped and the check above refuses.
@@ -27,6 +28,11 @@
  * buffer of this session stays live. If storage is in doubt, Linux could not mount its root, so
  * this resets the SoC through the watchdog instead and iBoot counts a failed boot. With ANS
  * already running, =3/=4 train as =1/=2.
+ *
+ * With the SMC release (=2, =4) the N1's reset is pulsed through the SMC as Aura's J813 code does
+ * (aurora-silicon/aura 21c3f707e0, src/j813_n1.c): pci-bridge0 function-reset is
+ * pKW4("gP13", 0x00800000) on the J716s as on J813; write template | 0, 50 ms, template | 1,
+ * 50 ms, then 100 ms before the port reset, and allow 1 s for link up.
  */
 
 #include "pcie_t6050.h"
@@ -538,8 +544,8 @@ static int stage_d(const struct port_regs *pp)
     return 0;
 }
 
-/* E: lane PHY, refclk, PERST# release, LTSSM, link up */
-static int stage_e(const struct port_regs *pp)
+/* E: lane PHY, refclk, PERST# release, LTSSM, link up within link_ms */
+static int stage_e(const struct port_regs *pp, u32 link_ms)
 {
     u64 p2 = pp->ctl;
 
@@ -565,7 +571,7 @@ static int stage_e(const struct port_regs *pp)
         FAIL("PERST# readback 0x%x\n", read32(pp->perst));
 
     TRY(rmw("LTSSM start", p2 + PORT_LTSSMCTL, 0, BIT(0)));
-    TRY(poll_set("link up", p2 + PORT_LINKSTS, BIT(0), 500));
+    TRY(poll_set("link up", p2 + PORT_LINKSTS, BIT(0), link_ms));
     mdelay(100);
     return 0;
 }
@@ -616,20 +622,28 @@ static int stage_g(const struct port_regs *pp)
 /* Release the N1's reset through the SMC: pKW4(key, template | 1), as dcp.c raises its rails */
 static int n1_smc_release(const struct port_regs *pp)
 {
+    int ret = 0;
+
     if (!pp->reset_key)
         FAIL("%s function-reset is not an SMC pKW4\n", pp->bridge);
+    rtkit_set_boot_timeout(10 * USEC_PER_SEC);
     smc_dev_t *smc = smc_init();
+    rtkit_set_boot_timeout(0);
     if (!smc)
         FAIL("SMC not available\n");
-    u32 value = pp->reset_template | 1;
-    int ret = smc_write_u32(smc, pp->reset_key, value);
+    /* as J813: assert (template | 0), 50 ms, release (template | 1), 50 ms */
+    for (u32 level = 0; level < 2 && !ret; level++) {
+        u32 value = pp->reset_template | level;
+        ret = smc_write_u32(smc, pp->reset_key, value);
+        printf("pcie-t6050: SMC key %c%c%c%c <- 0x%08x: %d\n", (pp->reset_key >> 24) & 0xff,
+               (pp->reset_key >> 16) & 0xff, (pp->reset_key >> 8) & 0xff, pp->reset_key & 0xff,
+               value, ret);
+        mdelay(50);
+    }
     smc_shutdown(smc);
-    printf("pcie-t6050: SMC key %c%c%c%c <- 0x%08x: %d\n", (pp->reset_key >> 24) & 0xff,
-           (pp->reset_key >> 16) & 0xff, (pp->reset_key >> 8) & 0xff, pp->reset_key & 0xff, value,
-           ret);
     if (ret)
         return -1;
-    mdelay(10);
+    mdelay(100); /* J813: before the port reset */
     return 0;
 }
 
@@ -663,7 +677,7 @@ static int n1_train(bool smc_release)
         TRY(stage_b(&pr));
         TRY(stage_c(&pr));
         TRY(stage_d(&pr));
-        TRY(stage_e(&pr));
+        TRY(stage_e(&pr, smc_release ? 1000 : 500));
     }
     TRY(stage_f(&pr));
     TRY(storage_check("after F", false));
