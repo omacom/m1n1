@@ -182,6 +182,7 @@ static int dt_measure_gpu_t6034(void *d)
 }
 ''' + function(t6031, "bool t6031_board(const void *dt)\n{") + \
         function(t6031, "bool t6034_board(const void *dt)\n{") + \
+        function(t6031, "bool j516m_board(const void *dt)\n{") + \
         function(gpu, "static bool g15_optin(") + \
         function(gpu, "static int dt_set_gpu_t8122_select(void *dt)\n{") + \
         function(gpu, "static int dt_set_gpu_t6031(void *dt)\n{") + \
@@ -520,8 +521,7 @@ def test_other_maxes_and_macs_get_no_default(tools, build, board):
     booted(b)
     assert not any(n.startswith(M3_LINES) for n in b.chosen), b.stdout
     assert not b.probes
-    # J433 reaches only the T8122 reservations; these boards get no graphics defaults.
-    assert b.select == {"j433": "reservation-only"}.get(board, "none")
+    assert b.select == {"j433": "reservation-only", "j516m": "t6034-disabled"}.get(board, "none")
 
 
 @pytest.mark.parametrize("config,lines", [
