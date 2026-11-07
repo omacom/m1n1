@@ -5247,10 +5247,156 @@ static void dt_set_j514s_native(void)
             printf("FDT: J514S DCPEXT%u handoff refused\n", n);
 }
 
+/*
+ * T6050 (M5 Pro/Max, J716s): every running coprocessor's log segment, and the internal display as
+ * iBoot leaves it. Both are fail-soft: a failure is logged and leaves the DT as it was.
+ */
+
+/* One copy of each log prefix: the raw image's file part has little room left (m1n1-raw.ld) */
+static const char t6050_fdt_pfx[] = "FDT: T6050: ";
+#define t6050_fdt_log(fmt, ...) printf("%s" fmt, t6050_fdt_pfx, ##__VA_ARGS__)
+
+/* A copy of the DT, for t6050_dt_done() */
+static void *t6050_dt_save(void)
+{
+    void *saved = malloc(dt_bufsize);
+
+    if (saved)
+        memcpy(saved, dt, dt_bufsize);
+    else
+        t6050_fdt_log("no memory for a DT copy\n");
+    return saved;
+}
+
+/* Undo every DT edit since t6050_dt_save() unless @ok; frees the copy either way */
+static bool t6050_dt_done(void *saved, bool ok)
+{
+    if (!ok)
+        memcpy(dt, saved, dt_bufsize);
+    free(saved);
+    return ok;
+}
+
+/*
+ * The first /memreserve/ entry or enabled /reserved-memory node that overlaps [base, base+size):
+ * its name ("/memreserve/" for an entry), or NULL if none does.
+ */
+static const char *t6050_resv_overlap(u64 base, u64 size, u64 *a, u64 *s)
+{
+    int resv, node, n = fdt_num_mem_rsv(dt);
+
+    for (int i = 0; i < n; i++)
+        if (!fdt_get_mem_rsv(dt, i, a, s) && base < *a + *s && *a < base + size)
+            return "/memreserve/";
+    resv = fdt_path_offset(dt, "/reserved-memory");
+    if (resv < 0)
+        return NULL;
+    fdt_for_each_subnode(node, dt, resv)
+    {
+        const char *status = fdt_getprop(dt, node, "status", NULL);
+        int len = 0;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+
+        if (status && !strcmp(status, "disabled"))
+            continue;
+        for (int k = 0; reg && (k + 2) * (int)sizeof(*reg) <= len; k += 2) {
+            *a = fdt64_ld(&reg[k]);
+            *s = fdt64_ld(&reg[k + 1]);
+            if (base < *a + *s && *a < base + size)
+                return fdt_get_name(dt, node, NULL) ?: "?";
+        }
+    }
+    return NULL;
+}
+
+/*
+ * iBoot puts the __OS_LOG segment (segment-ranges flags 0xa) of each coprocessor it leaves running
+ * (dcp, dcpext0..3, aop, mtp, auss-cpu0 on a J716s) in DRAM it then hands to the OS, and those
+ * coprocessors keep writing it. On a J716s 27.3 beta 1 stub they sit at
+ * 0x10006020000..0x10006126514, inside the usable RAM this loader publishes. Reserve each one,
+ * no-map, by physical address. A segment that already overlaps a /memreserve/ entry or another
+ * reservation is left alone and logged. Nothing is written to the hardware. kboot_display_handoff.c
+ * reserves only the dcp and dcpextN logs, through its per-SoC handoff; on T6050 every coprocessor
+ * found in the ADT is covered here.
+ */
+static int dt_reserve_t6050_oslogs_of(int at, u64 ram_lo, u64 ram_hi)
+{
+    u32 len = 0;
+    int n = 0;
+    const struct adt_segment_ranges *seg = adt_getprop(adt, at, "segment-ranges", &len);
+
+    if (!seg || !len || len % sizeof(*seg))
+        return 0;
+    for (u32 i = 0; i < len / sizeof(*seg); i++) {
+        struct adt_segment_ranges r;
+        memcpy(&r, &seg[i], sizeof(r));
+        if (r.unk != 0xa || !r.size || r.phys >= ram_hi || r.phys + r.size <= ram_lo)
+            continue;
+        u64 base = ALIGN_DOWN(r.phys, SZ_16K);
+        u64 size = ALIGN_UP(r.phys + r.size, SZ_16K) - base;
+        u64 a, s;
+        char name[32];
+        snprintf(name, sizeof(name), "os-log@%lx", base);
+        const char *other = t6050_resv_overlap(base, size, &a, &s);
+        /* The owner (dcp, aop) and its nub (iop-dcp-nub) repeat the same segments. */
+        if (other && !strcmp(other, name))
+            continue;
+        if (other) {
+            t6050_fdt_log("%s __OS_LOG 0x%lx+0x%lx overlaps %s 0x%lx+0x%lx, skipped\n",
+                          adt_get_name(adt, at), base, size, other, a, s);
+            continue;
+        }
+        if (dt_get_or_add_reserved_mem(name, "apple,os-log", true, base, size) < 0)
+            return -1;
+        t6050_fdt_log("%s __OS_LOG 0x%lx+0x%lx reserved\n", adt_get_name(adt, at), base, size);
+        n++;
+    }
+    return n;
+}
+
+static void dt_reserve_t6050_oslogs(void)
+{
+    u64 ram_lo = cur_boot_args.phys_base, ram_hi = ram_lo + cur_boot_args.mem_size;
+    int total = 0, dev = adt_path_offset(adt, "/arm-io");
+    void *saved;
+
+    if (dev < 0 || !(saved = t6050_dt_save()))
+        return;
+
+    ADT_FOREACH_CHILD(adt, dev)
+    {
+        int n = dt_reserve_t6050_oslogs_of(dev, ram_lo, ram_hi);
+        int nub = adt_get_child_count(adt, dev) ? adt_first_child_offset(adt, dev) : -1;
+        for (int k = nub < 0 ? 0 : adt_get_child_count(adt, dev); n >= 0 && k--;
+             nub = adt_next_sibling_offset(adt, nub)) {
+            int m = dt_reserve_t6050_oslogs_of(nub, ram_lo, ram_hi);
+            n = m < 0 ? m : n + m;
+        }
+        if (n < 0) {
+            t6050_dt_done(saved, false);
+            t6050_fdt_log("__OS_LOG reservation failed, none reserved\n");
+            return;
+        }
+        total += n;
+    }
+    t6050_dt_done(saved, true);
+    t6050_fdt_log("reserved %d coprocessor __OS_LOG segments\n", total);
+}
+
 static int dt_set_display(void)
 {
     if (chip_id == T8140)
         return dt_set_display_t8140();
+
+    /*
+     * T6050: never go through dt_carveout_reserved_regions(): it initialises, walks and shuts down
+     * the display DARTs the running DCP depends on.
+     */
+    if (chip_id == T6050) {
+        dt_reserve_t6050_oslogs();
+        dart_lock_adt("/arm-io/dart-disp0", 0);
+        return 0;
+    }
 
     /* lock dart-disp0 to prevent old software from resetting it */
     dart_lock_adt("/arm-io/dart-disp0", 0);
