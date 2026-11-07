@@ -5401,7 +5401,9 @@ static void dt_reserve_t6050_oslogs(void)
  * never initialised, walked or shut down here (dt_carveout_reserved_regions() would do all three,
  * and the kboot_display_handoff.c walk is written for two-level tables; these are four-level).
  *
- * apple,firmware-compat is the stub's own version. chosen.asahi,t6050-dcp-compat=27.0.0 publishes
+ * apple,firmware-compat names the DCP interface the stub's firmware implements: the stub's own
+ * version, except that the 27.3 beta 1 stub publishes <27 3 0>, the interface read from its DCP
+ * firmware (IOMFB method tags and swap layout). chosen.asahi,t6050-dcp-compat=27.0.0 publishes
  * <27 0 0> instead: that claims an ABI this firmware was not built for; experiment only.
  */
 #define T6050_ASC_CPU_CONTROL     0x44
@@ -5568,6 +5570,7 @@ static int t6050_disp_publish(const struct t6050_disp_nodes *ph, u64 vram, u64 v
 static void dt_set_display_t6050(void)
 {
     static const struct fw_version_info compat_27_0 = {V27_0, "27.0", {27, 0, 0}, 3, "override"};
+    static const struct fw_version_info compat_27_3 = {V27_3B1, "27.3", {27, 3, 0}, 3, "compat"};
     struct t6050_disp_state e;
 
     t6050_disp_read(&e);
@@ -5613,7 +5616,8 @@ static void dt_set_display_t6050(void)
         t6050_dcp_log("no ADT /vram above OS RAM: no handoff\n");
         return;
     }
-    const struct fw_version_info *compat = &os_firmware;
+    const struct fw_version_info *compat =
+        os_firmware.version == V27_3B1 ? &compat_27_3 : &os_firmware;
     if (t6050_chosen_is("asahi,t6050-dcp-compat", "27.0.0")) {
         t6050_dcp_log("OVERRIDE: firmware-compat 27.0.0\n");
         compat = &compat_27_0;
