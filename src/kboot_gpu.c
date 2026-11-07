@@ -2759,12 +2759,12 @@ static int dt_measure_gpu_t6034(void *dt)
     gpu = fdt_path_offset(dt, "gpu");
     if (gpu < 0 || fdt_node_check_compatible(dt, gpu, "apple,agx-t6034"))
         return 0;
-    /* Owner opt-outs suppress this too; kboot.c handles a lost config line. */
+    /*
+     * Only the GPU switch decides, as on T6031: chosen.asahi,m3-defaults=0 withholds the default
+     * but keeps an owner's own asahi,t6034-gpu=1. kboot.c handles a lost config line.
+     */
     int chosen = fdt_path_offset(dt, "/chosen"), len;
-    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,m3-defaults", &len);
-    if (opt && (len != 2 || opt[0] != '1' || opt[1]))
-        return 0;
-    opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t6034-gpu", &len);
+    const char *opt = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "asahi,t6034-gpu", &len);
     if (opt && (len != 2 || opt[0] != '1' || opt[1]))
         return 0;
     if (adt_path_offset_trace(adt, "/arm-io/sgx", path) < 0 ||

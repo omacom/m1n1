@@ -99,12 +99,17 @@ int main(void)
  }
  reset("apple,j514m","apple,t6031");assert(!dt_measure_gpu_t6034(dt));assert(!enabled);
  reset("apple,j514m","apple,t6034");chip_id=0x6031;assert(!dt_measure_gpu_t6034(dt));assert(!enabled);
- const char *keys[]={"asahi,m3-defaults","asahi,t6034-gpu"};
  const char *values[]={"0","","true","01","1x"};
- for(unsigned i=0;i<ARRAY_SIZE(keys);i++) for(unsigned j=0;j<ARRAY_SIZE(values);j++) {
-  reset("apple,j514m","apple,t6034");assert(!fdt_setprop_string(dt,fdt_path_offset(dt,"/chosen"),keys[i],values[j]));
+ for(unsigned j=0;j<ARRAY_SIZE(values);j++) {
+  reset("apple,j514m","apple,t6034");assert(!fdt_setprop_string(dt,fdt_path_offset(dt,"/chosen"),"asahi,t6034-gpu",values[j]));
   assert(!dt_measure_gpu_t6034(dt));assert(!enabled && !restored && !reads && !images);stays_disabled();
  }
+ /* m3-defaults=0 withholds only the default: an owner's own GPU line of 1 still measures */
+ reset("apple,j514m","apple,t6034");
+ assert(!fdt_setprop_string(dt,fdt_path_offset(dt,"/chosen"),"asahi,m3-defaults","0"));
+ assert(!fdt_setprop_string(dt,fdt_path_offset(dt,"/chosen"),"asahi,t6034-gpu","1"));
+ assert(!dt_measure_gpu_t6034(dt));
+ assert(enabled==1 && restored==1 && reads==6 && images==1 && result()==T8122_ID_PASS);stays_disabled();
  reset("apple,j514m","apple,t6034");bad_window=1;assert(!dt_measure_gpu_t6034(dt));assert(!enabled && !reads);
  return 0;
 }

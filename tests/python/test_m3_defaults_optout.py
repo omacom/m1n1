@@ -847,6 +847,8 @@ def test_updater_read_loop_fix_keeps_a_last_line_without_newline(tools):
     (b"chosen.asahi,t6034-gpu=0\n", False, True),
     (b"chosen.asahi,t6034-dcp=0\n", True, False),
     (b"chosen.asahi,m3-defaults=0\n", False, False),
+    (b"chosen.asahi,m3-defaults=0\nchosen.asahi,t6034-gpu=1\n", True, False),
+    (b"chosen.asahi,m3-defaults=0\nchosen.asahi,t6034-dcp=1\n", False, True),
     (LOST, False, False),
 ])
 def test_j514m_defaults_and_owner_choices(tools, build, config, gpu, display):
