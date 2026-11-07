@@ -6466,7 +6466,8 @@ int kboot_prepare_dt(void *fdt)
             image_end < (u64)_base || image_end > ram_end)
             bail("FDT: invalid T8103 inherited memory extent\n");
     }
-    if (chip_id == T8140) {
+    /* T6050 hands its live NVMe session to Linux the same way: keep the heap. */
+    if (chip_id == T8140 || chip_id == T6050) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();
 
@@ -6585,7 +6586,7 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_disable_missing_devs("acio", "cio@", 8, 2))
         return -1;
-    if (dt_disable_missing_devs("i2c", "i2c@", 8, 0))
+    if (dt_disable_missing_devs("i2c", "i2c@", 16, 0)) /* T6050 (J714c) has nine i2c nodes */
         return -1;
     if (dt_disable_missing_j700_touch_id())
         return -1;
@@ -6699,7 +6700,18 @@ int kboot_boot(void *kernel)
         if (dt_remain < SZ_16K)
             printf("FDT: free dt buffer space low, %u bytes left\n", dt_remain);
     }
-    ret = chip_id == T8142 ? dapf_init_fdt(dt) : dapf_init_all();
+    if (chip_id == T8142) {
+        ret = dapf_init_fdt(dt);
+    } else if (chip_id == T6050) {
+        /*
+         * Only the MTP filter, reg 1 of dart-mtp: the AOP entry of the
+         * table points at the block shared by every DART and faults.
+         */
+        ret = dapf_init("/arm-io/dart-mtp", 1);
+        printf("kboot: MTP DAPF %s on T6050\n", ret < 0 ? "failed" : "programmed");
+    } else {
+        ret = dapf_init_all();
+    }
     if (ret < 0 && chip_id == T8140) {
         printf("kboot: refusing T8140 handoff after DAPF failure\n");
         pcie_shutdown();
