@@ -391,7 +391,8 @@ static int dt_set_t8140_wfx_args(int node)
  * chosen.asahi,t6031-gpu=0 keeps the GPU off and the display default still goes in, and
  * chosen.asahi,t6031-dcp=0 the other way round. The kernel decides whether it takes the display
  * over; one that does not leaves it on the boot framebuffer. J514C gets the same two defaults
- * on a normal build. T6034 Maxes (J514M, J516M) and other boards are untouched.
+ * on a normal build. J514M/T6034 gets independent display and GPU defaults;
+ * J516M and other boards are untouched.
  */
 struct m3_default_board {
     const char *soc;
@@ -412,14 +413,18 @@ static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
 static const char *const m3_max_boards[] = {"apple,j514c", "apple,j516c", NULL};
 static const char *const m3_max_switches[] = {"asahi,t6031-dcp", "asahi,t6031-gpu", NULL};
+static const char *const m3_max14_boards[] = {"apple,j514m", NULL};
+static const char *const m3_max14_switches[] = {"asahi,t6034-dcp", "asahi,t6034-gpu", NULL};
 static const char *const m3_air_graphics[] = {"asahi,t8122-", "asahi,j613-", "asahi,j615-", NULL};
 static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
 static const char *const m3_max_graphics[] = {"asahi,t6031-", NULL};
+static const char *const m3_max14_graphics[] = {"asahi,t6034-", NULL};
 
 static const struct m3_default_board m3_default_boards[] = {
     {"apple,t8122", m3_air_boards, m3_air_switches, true, m3_air_graphics},
     {"apple,t6030", m3_pro_boards, m3_pro_switches, false, m3_pro_graphics},
     {"apple,t6031", m3_max_boards, m3_max_switches, false, m3_max_graphics},
+    {"apple,t6034", m3_max14_boards, m3_max14_switches, false, m3_max14_graphics},
 };
 
 #define M3_DEFAULTS_SWITCH "asahi,m3-defaults"
@@ -5318,7 +5323,8 @@ static int dt_set_display(void)
         return 0;
     } else if (!fdt_node_check_compatible(dt, 0, "apple,t6030") ||
                !fdt_node_check_compatible(dt, 0, "apple,t8122") ||
-               !fdt_node_check_compatible(dt, 0, "apple,t6031")) {
+               !fdt_node_check_compatible(dt, 0, "apple,t6031") ||
+               (t6034_board(dt) || j516m_board(dt))) {
         /*
          * Fail-soft handoff (kboot_display_handoff.c): it always returns 0, never uses the
          * helpers above (they bail out of kboot or enable nodes) and never enables a node.
@@ -5326,8 +5332,23 @@ static int dt_set_display(void)
          * reserved only with chosen.asahi,t8122-dcpext=1 and that handoff. On T6031 it does nothing
          * unless the board is a J514C or J516C, and reserves only __OS_LOG unless
          * chosen.asahi,t6031-dcp=1. dt_set_m3_defaults() supplies it on J514C and J516C;
-         * an owner's explicit value always wins.
+         * an owner's explicit value always wins. J514M/T6034 uses its own handoff
+         * and defaults with the same independent owner choices.
          */
+        if (j516m_board(dt) && chosen_lost) {
+            /* A lost owner =0 can leave an earlier =1. Keep only live-log reservations. */
+            static const char *const switches[] = {"asahi,t6034-dcp", "asahi,t6034-dcpext",
+                                                   "asahi,t6034-dispext"};
+            int chosen = fdt_path_offset(dt, "/chosen");
+            if (chosen < 0)
+                return -1;
+            for (size_t i = 0; i < ARRAY_SIZE(switches); i++) {
+                int err = fdt_delprop(dt, chosen, switches[i]);
+                if (err && err != -FDT_ERR_NOTFOUND)
+                    return err;
+            }
+            printf("FDT: J516M: a config line was lost: no display or external handoff\n");
+        }
         ret = dt_set_display_handoff(dt);
         if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))
             dt_reserve_dcpext_firmware(false);
@@ -5583,6 +5604,25 @@ static int dt_set_pmp_t6031(void)
 {
     if (t6031_board(dt))
         dt_pass_pmp(&pmp_values_t6031);
+    return 0;
+}
+
+/* Fresh J514M ADT: the same PMP interrupt/DART layout, with a separate handoff. */
+static const struct pmp_values_soc pmp_values_t6034 = {
+    "apple,t6034", "asahi,t6034-pmp", "T6034", {1181, 1180, 1183, 1182}, 0x290300000, 0x4000,
+};
+
+/* J516M uses the same measured layout and its established T6031 namespace. */
+static const struct pmp_values_soc pmp_values_j516m = {
+    "apple,t6034", "asahi,t6031-pmp", "T6034", {1181, 1180, 1183, 1182}, 0x290300000, 0x4000,
+};
+
+static int dt_set_pmp_t6034(void)
+{
+    if (t6034_board(dt))
+        dt_pass_pmp(&pmp_values_t6034);
+    else if (j516m_board(dt))
+        dt_pass_pmp(&pmp_values_j516m);
     return 0;
 }
 
@@ -6435,8 +6475,8 @@ int kboot_prepare_dt(void *fdt)
     // A T6030 also takes its display ADT facts (at most 46K, headers and strings included)
     if (chip_id == T6030)
         dt_bufsize += 4 * SZ_16K;
-    // A T6031 takes its PMP values (32K) and its display, GPU and firmware handoff (about 16K)
-    if (chip_id == T6031)
+    // T6031 and J516M take PMP values (32K) and display, GPU and firmware handoff (about 16K)
+    if (chip_id == T6031 || j516m_board(fdt))
         dt_bufsize += 4 * SZ_16K;
     // A T6032 takes only its firmware image UUID list (about 16K)
     if (chip_id == T6032)
@@ -6571,7 +6611,8 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_display())
         return -1;
-    if (dt_set_gpu(dt))
+    /* A lost owner opt-out must also suppress the T6034 measurement. */
+    if (!(chip_id == T6034 && chosen_lost) && dt_set_gpu(dt))
         return -1;
     if (dt_set_multitouch())
         return -1;
@@ -6643,6 +6684,10 @@ int kboot_prepare_dt(void *fdt)
      */
     if (chip_id == T6031) {
         dt_set_pmp_t6031();
+        dt_t6031_fw_uuids(dt);
+        dt_t6031_facts(dt);
+    } else if (chip_id == T6034) {
+        dt_set_pmp_t6034();
         dt_t6031_fw_uuids(dt);
         dt_t6031_facts(dt);
     } else if (chip_id == T6032) {
