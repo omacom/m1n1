@@ -50,6 +50,8 @@ u8 secondary_stacks_el3[MAX_EL3_CPUS][SECONDARY_STACK_SIZE] ALIGNED(0x4000);
 static bool wfe_mode SMP_SHARED = false;
 
 static int target_cpu SMP_SHARED;
+_Static_assert(MAX_CPUS > 0 && MAX_CPUS <= 64, "MAX_CPUS must fit the u64 CPU masks");
+
 static int cpu_nodes[MAX_CPUS];
 static struct spin_table spin_table[MAX_CPUS] SMP_SHARED;
 
@@ -463,6 +465,11 @@ static int smp_init_t8152(void)
 {
     if (smp_initialized)
         return 0;
+    /* cpu_nodes/cpu_info/spin_table/secondary_stacks are indexed by cpu-id up to 11. */
+    if (MAX_CPUS < 12) {
+        printf("SMP: T8152 needs MAX_CPUS >= 12 (built with %d)\n", MAX_CPUS);
+        return -1;
+    }
 
     int path[8];
     int pmgr = adt_path_offset_trace(adt, "/arm-io/pmgr-child", path);
