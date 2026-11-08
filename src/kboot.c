@@ -391,8 +391,8 @@ static int dt_set_t8140_wfx_args(int node)
  * chosen.asahi,t6031-gpu=0 keeps the GPU off and the display default still goes in, and
  * chosen.asahi,t6031-dcp=0 the other way round. The kernel decides whether it takes the display
  * over; one that does not leaves it on the boot framebuffer. J514C gets the same two defaults
- * on a normal build. J514M/T6034 gets independent display and GPU defaults;
- * J516M and other boards are untouched.
+ * on a normal build. The T6034 Maxes (J514M, J516M) get independent display and GPU defaults;
+ * their external displays (t6034-dcpext, t6034-dispext) stay off. Other boards are untouched.
  */
 struct m3_default_board {
     const char *soc;
@@ -413,7 +413,7 @@ static const char *const m3_pro_boards[] = {"apple,j514s", "apple,j516s", NULL};
 static const char *const m3_pro_switches[] = {"asahi,t6030-dcp", "asahi,t6030-gpu", NULL};
 static const char *const m3_max_boards[] = {"apple,j514c", "apple,j516c", NULL};
 static const char *const m3_max_switches[] = {"asahi,t6031-dcp", "asahi,t6031-gpu", NULL};
-static const char *const m3_max14_boards[] = {"apple,j514m", NULL};
+static const char *const m3_max14_boards[] = {"apple,j514m", "apple,j516m", NULL};
 static const char *const m3_max14_switches[] = {"asahi,t6034-dcp", "asahi,t6034-gpu", NULL};
 static const char *const m3_air_graphics[] = {"asahi,t8122-", "asahi,j613-", "asahi,j615-", NULL};
 static const char *const m3_pro_graphics[] = {"asahi,t6030-", NULL};
@@ -5332,23 +5332,9 @@ static int dt_set_display(void)
          * reserved only with chosen.asahi,t8122-dcpext=1 and that handoff. On T6031 it does nothing
          * unless the board is a J514C or J516C, and reserves only __OS_LOG unless
          * chosen.asahi,t6031-dcp=1. dt_set_m3_defaults() supplies it on J514C and J516C;
-         * an owner's explicit value always wins. J514M/T6034 uses its own handoff
-         * and defaults with the same independent owner choices.
+         * an owner's explicit value always wins. The T6034 Maxes (J514M, J516M) use their own
+         * handoffs and defaults with the same independent owner choices.
          */
-        if (j516m_board(dt) && chosen_lost) {
-            /* A lost owner =0 can leave an earlier =1. Keep only live-log reservations. */
-            static const char *const switches[] = {"asahi,t6034-dcp", "asahi,t6034-dcpext",
-                                                   "asahi,t6034-dispext"};
-            int chosen = fdt_path_offset(dt, "/chosen");
-            if (chosen < 0)
-                return -1;
-            for (size_t i = 0; i < ARRAY_SIZE(switches); i++) {
-                int err = fdt_delprop(dt, chosen, switches[i]);
-                if (err && err != -FDT_ERR_NOTFOUND)
-                    return err;
-            }
-            printf("FDT: J516M: a config line was lost: no display or external handoff\n");
-        }
         ret = dt_set_display_handoff(dt);
         if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))
             dt_reserve_dcpext_firmware(false);

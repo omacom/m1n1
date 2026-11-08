@@ -516,7 +516,7 @@ def test_t6031_owner_lines_are_kept(tools, build, board, config, lines, select):
     assert b.armed & {MAX_DCP, MAX_GPU} == {k for k, v in lines.items() if v == "1"}
 
 
-@pytest.mark.parametrize("board", ["j516m", "j293", "j433"])
+@pytest.mark.parametrize("board", ["j293", "j433"])
 @pytest.mark.parametrize("build", STAGE2)
 def test_other_maxes_and_macs_get_no_default(tools, build, board):
     b = boot(tools, build, b"", board=board)
@@ -524,7 +524,7 @@ def test_other_maxes_and_macs_get_no_default(tools, build, board):
     assert not any(n.startswith(M3_LINES) for n in b.chosen), b.stdout
     assert not b.probes
     # these boards have no admitted GPU path; the J433 (M3 iMac) reaches only the T8122 reservations
-    assert b.select == {"j433": "reservation-only", "j516m": "t6034-disabled"}.get(board, "none")
+    assert b.select == {"j433": "reservation-only"}.get(board, "none")
 
 
 @pytest.mark.parametrize("config,lines", [
@@ -854,8 +854,9 @@ def test_updater_read_loop_fix_keeps_a_last_line_without_newline(tools):
     (b"chosen.asahi,m3-defaults=0\nchosen.asahi,t6034-dcp=1\n", False, True),
     (LOST, False, False),
 ])
-def test_j514m_defaults_and_owner_choices(tools, build, config, gpu, display):
-    b = boot(tools, build, config, board="j514m")
+@pytest.mark.parametrize("board", ["j514m", "j516m"])
+def test_t6034_defaults_and_owner_choices(tools, build, board, config, gpu, display):
+    b = boot(tools, build, config, board=board)
     booted(b)
     assert ("asahi,t6034-gpu" in b.armed) == gpu
     assert ("asahi,t6034-dcp" in b.armed) == display
