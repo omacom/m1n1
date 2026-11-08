@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
-"""The J516M device tree gets the T6031 handoff allowance in kboot_prepare_dt().
+"""J514M and J516M device trees get the T6031 handoff allowance in kboot_prepare_dt().
 
-J516M runs the T6031 display and PMP handoff (PMP values, display, GPU and firmware facts), so its
+Both T6034 boards run the same handoff (J514M under its own chosen names). On J514M hardware the
+base allowance left 2982 bytes after it. J516M runs the T6031 display and PMP handoff (PMP values, display, GPU and firmware facts), so its
 output tree needs the same extra room as a T6031. Without it, copying the PMP tunables fails on
 hardware and the kernel gets no PMP node: boot framebuffer, no GPU. This builds the real sizing
 block and the real board helpers against libfdt, then fills a tree of that size with a T6031-sized
@@ -25,7 +26,7 @@ def sizing_block():
     return fn[a:b].replace('assert(dt_bufsize);', 'assert(dt_bufsize > 0);')
 
 
-def test_j516m_gets_the_t6031_handoff_allowance(tmp_path):
+def test_t6034_boards_get_the_t6031_handoff_allowance(tmp_path):
     helper = (ROOT / 'src/kboot_t6031.c').read_text()
     code = r'''
 #include <assert.h>
@@ -86,9 +87,13 @@ int main(void)
     size_for(T6034, "apple,j516m", "apple,t6034");
     assert(takes_t6031_handoff(j516m));
     assert(!takes_t6031_handoff(base));     /* the payload does not fit the base allowance */
-    /* the allowance follows the exact board: J514M, a mismatched SoC or chip keep the base */
-    assert(j514m == base);
+    assert(j514m == j516c);                 /* J514M runs the same handoff */
+    size_for(T6034, "apple,j514m", "apple,t6034");
+    assert(takes_t6031_handoff(j514m));
+    /* the allowance follows the exact board: other T6034 boards and mismatched SoCs keep the base */
+    assert(size_for(T6034, "apple,j999", "apple,t6034") == base);
     assert(size_for(T6034, "apple,j516m", "apple,t6031") == base);
+    assert(size_for(T6034, "apple,j514m", "apple,t6031") == base);
     return 0;
 }
 '''

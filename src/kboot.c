@@ -6461,8 +6461,8 @@ int kboot_prepare_dt(void *fdt)
     // A T6030 also takes its display ADT facts (at most 46K, headers and strings included)
     if (chip_id == T6030)
         dt_bufsize += 4 * SZ_16K;
-    // T6031 and J516M take PMP values (32K) and display, GPU and firmware handoff (about 16K)
-    if (chip_id == T6031 || j516m_board(fdt))
+    // T6031, J514M and J516M take PMP values (32K) and display, GPU and firmware handoff (about 16K)
+    if (chip_id == T6031 || t6034_board(fdt) || j516m_board(fdt))
         dt_bufsize += 4 * SZ_16K;
     // A T6032 takes only its firmware image UUID list (about 16K)
     if (chip_id == T6032)
