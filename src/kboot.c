@@ -53,6 +53,8 @@
 
 static void *dt = NULL;
 static int dt_bufsize = 0;
+/* End of the retained heap reservation (T8140, T6050); 0 when the heap is not retained */
+static u64 retained_heap_end = 0;
 static void *initrd_start = NULL;
 static size_t initrd_size = 0;
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
@@ -6251,6 +6253,36 @@ int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n)
     return fdt_pack(dt);
 }
 
+/*
+ * The last steps before the jump (the T6050 USB host flip) can still grow the
+ * heap after kboot_prepare_dt() reserved it; reserve what they added.
+ */
+int kboot_retain_late_heap(void)
+{
+    if (!dt || !retained_heap_end || !next_stage.entry || next_stage.args[0] != (u64)dt)
+        return 0;
+    void *packed = malloc(fdt_totalsize(dt));
+    if (!packed)
+        return -1;
+    memcpy(packed, dt, fdt_totalsize(dt));
+    /* Read after the copy's own allocation, which can grow the heap too. */
+    u64 heap_end = ALIGN_UP(heapblock_high_water(), SZ_16K);
+    int ret = 0;
+    if (heap_end > retained_heap_end) {
+        ret = fdt_open_into(packed, dt, dt_bufsize);
+        if (!ret)
+            ret = fdt_add_mem_rsv(dt, retained_heap_end, heap_end - retained_heap_end);
+        if (!ret)
+            ret = fdt_pack(dt);
+        if (!ret) {
+            printf("FDT: late heap [0x%lx, 0x%lx) retained\n", retained_heap_end, heap_end);
+            retained_heap_end = heap_end;
+        }
+    }
+    free(packed);
+    return ret;
+}
+
 int kboot_set_chosen(const char *name, const char *value)
 {
     int i = 0;
@@ -6440,6 +6472,7 @@ int kboot_prepare_dt(void *fdt)
         next_stage.entry = NULL;
         bail("FDT: refusing preparation while secondary callbacks are pending\n");
     }
+    retained_heap_end = 0;
     if (dt) {
         free(dt);
         dt = NULL;
@@ -6518,6 +6551,9 @@ int kboot_prepare_dt(void *fdt)
             if (heap_end > ram_end || fdt_add_mem_rsv(dt, heap_start, heap_end - heap_start))
                 bail("FDT: couldn't reserve retained heap\n");
             printf("FDT: retained heap [0x%lx, 0x%lx)\n", heap_start, heap_end);
+            retained_heap_end = heap_end;
+        } else {
+            retained_heap_end = image_end;
         }
     }
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
