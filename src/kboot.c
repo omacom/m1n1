@@ -5535,10 +5535,55 @@ struct t6050_disp_nodes {
     u32 dcp, disp, dart_dcp, dart_disp, mbox;
 };
 
+/*
+ * The phandles of the nodes at @off (dcp, display subsystem, dart-dcp, dart-disp0, mailbox).
+ * dtc writes a phandle only for a node some property references, and nothing references the dcp
+ * or the display subsystem in the J716s DT, so give each node that has none a new one. They are
+ * added from the highest offset down: a property added to a node moves only the nodes after it,
+ * so the offsets still to be used stay valid.
+ */
+static int t6050_disp_phandles(const int off[5], struct t6050_disp_nodes *ph)
+{
+    int on[5];
+    u32 phs[5];
+    bool todo[5];
+
+    for (unsigned i = 0; i < 5; i++) {
+        on[i] = off[i];
+        phs[i] = fdt_get_phandle(dt, on[i]);
+        todo[i] = !phs[i];
+    }
+    for (;;) {
+        int at = -1;
+        for (unsigned i = 0; i < 5; i++)
+            if (todo[i] && (at < 0 || on[i] > on[at]))
+                at = i;
+        if (at < 0)
+            break;
+        todo[at] = false;
+        if (fdt_generate_phandle(dt, &phs[at]) || fdt_setprop_u32(dt, on[at], "phandle", phs[at]))
+            return -1;
+        const char *name = fdt_get_name(dt, on[at], NULL);
+        t6050_dcp_log("%s had no phandle, gave it 0x%x\n", name ? name : "(node)", phs[at]);
+    }
+    ph->dcp = phs[0];
+    ph->disp = phs[1];
+    ph->dart_dcp = phs[2];
+    ph->dart_disp = phs[3];
+    ph->mbox = phs[4];
+    return 0;
+}
+
 /* Every DT edit of the handoff; on failure the caller restores the DT */
-static int t6050_disp_publish(const struct t6050_disp_nodes *ph, u64 vram, u64 vram_size,
+static int t6050_disp_publish(const int off[5], u64 vram, u64 vram_size,
                               const struct fw_version_info *compat)
 {
+    struct t6050_disp_nodes nodes;
+    const struct t6050_disp_nodes *ph = &nodes;
+
+    if (t6050_disp_phandles(off, &nodes))
+        return -1;
+
     const u32 on[] = {ph->dcp, ph->disp, ph->dart_dcp, ph->dart_disp, ph->mbox};
     const u32 mr[] = {ph->dcp, ph->disp};
     char name[32];
@@ -5622,20 +5667,10 @@ static void dt_set_display_t6050(void)
         t6050_dcp_log("OVERRIDE: firmware-compat 27.0.0\n");
         compat = &compat_27_0;
     }
-    struct t6050_disp_nodes ph = {
-        .dcp = fdt_get_phandle(dt, dcp),
-        .disp = fdt_get_phandle(dt, disp),
-        .dart_dcp = fdt_get_phandle(dt, dart_dcp),
-        .dart_disp = fdt_get_phandle(dt, dart_disp),
-        .mbox = fdt_get_phandle(dt, mbox),
-    };
-    if (!ph.dcp || !ph.disp || !ph.dart_dcp || !ph.dart_disp || !ph.mbox) {
-        t6050_dcp_log("a display node has no phandle: no handoff\n");
-        return;
-    }
+    const int off[5] = {dcp, disp, dart_dcp, dart_disp, mbox};
 
     void *saved = t6050_dt_save();
-    if (!saved || !t6050_dt_done(saved, !t6050_disp_publish(&ph, vram, vram_size, compat))) {
+    if (!saved || !t6050_dt_done(saved, !t6050_disp_publish(off, vram, vram_size, compat))) {
         t6050_dcp_log("DT edit failed: no handoff\n");
         return;
     }
