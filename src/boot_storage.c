@@ -61,6 +61,10 @@ static struct kernel_header *boot_prepare_image(const void *data, size_t file_si
         if (dest >= ram_end)
             return NULL;
         u64 cap = min((u64)IMAGE_CAP, ram_end - dest);
+#ifdef T6050_MTP_RSV
+        /* The decoder writes before it reserves; stop at the heap limit. */
+        cap = min(cap, (u64)heapblock_room(IMAGE_ALIGN));
+#endif
         u32 expected_size;
         memcpy(&expected_size, (const u8 *)data + file_size - 4, sizeof(expected_size));
         if (!expected_size || expected_size > cap)

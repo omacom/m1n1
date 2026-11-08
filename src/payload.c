@@ -83,6 +83,11 @@ static void *decompress_gz(void *p, size_t size)
     // Start at the end of the heap area, no allocation yet. The following code must not use
     // malloc or heapblock, until finalize_uncompression is called.
     void *dest = heapblock_alloc_aligned(0, KERNEL_ALIGN);
+#ifdef T6050_MTP_RSV
+    /* Bounded by the heap limit (below iBoot's MTP pages): the decoder stops there. */
+    if ((size_t)dest_len > heapblock_room(KERNEL_ALIGN))
+        dest_len = heapblock_room(KERNEL_ALIGN);
+#endif
 
     printf("Uncompressing... ");
     int ret = tinf_gzip_uncompress(dest, &dest_len, p, &source_len);
@@ -106,6 +111,10 @@ static void *decompress_xz(void *p, size_t size)
     // Start at the end of the heap area, no allocation yet. The following code must not use
     // malloc or heapblock, until finalize_uncompression is called.
     void *dest = heapblock_alloc_aligned(0, KERNEL_ALIGN);
+#ifdef T6050_MTP_RSV
+    if ((size_t)dest_len > heapblock_room(KERNEL_ALIGN))
+        dest_len = heapblock_room(KERNEL_ALIGN);
+#endif
 
     printf("Uncompressing... ");
     int ret = XzDecode(p, &source_len, dest, &dest_len);

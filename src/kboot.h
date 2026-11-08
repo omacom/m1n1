@@ -25,6 +25,11 @@ int kboot_set_chosen(const char *name, const char *value);
 void kboot_delete_chosen(const char *name);
 void kboot_set_config_lost(void);
 int kboot_set_uboot(const char *name, const char *value);
+#ifdef T6050_MTP_RSV
+int kboot_t6050_dart_mtp_scan(void);
+void kboot_t6050_limit_heap(void);
+bool kboot_t6050_mtp_meets(u64 start, u64 end);
+#endif
 int dt_gpu_t8122_26_calibrate(void *dt);
 int dt_set_gpu_t8122_26(void *dt);
 int kboot_prepare_dt(void *fdt);

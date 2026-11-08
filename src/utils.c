@@ -203,9 +203,23 @@ bool supports_pan(void)
 }
 
 // TODO: update mapping?
+#ifdef T6050_MTP_RSV
+bool kboot_t6050_mtp_meets(u64 start, u64 end);
+#endif
+
 u64 top_of_memory_alloc(size_t size)
 {
     static bool guard_page_inserted = false;
+#ifdef T6050_MTP_RSV
+    {
+        /* Never hand out a page that holds iBoot's live DART-mtp tables or a page they map:
+         * refuse before the caller writes it (this carves [top - size - guard, top)). */
+        u64 top = cur_boot_args.phys_base + cur_boot_args.mem_size;
+        u64 lo = top - ALIGN_UP(size, SZ_16K) - SZ_16K;
+        if (kboot_t6050_mtp_meets(lo, top))
+            panic("top_of_memory_alloc: [0x%lx, 0x%lx) holds iBoot DART-mtp pages\n", lo, top);
+    }
+#endif
     cur_boot_args.mem_size -= ALIGN_UP(size, SZ_16K);
     u64 ret = cur_boot_args.phys_base + cur_boot_args.mem_size;
 

@@ -15,6 +15,7 @@
 #include "firmware.h"
 #include "gxf.h"
 #include "heapblock.h"
+#include "kboot.h"
 #include "mcc.h"
 #include "memory.h"
 #include "nvme.h"
@@ -266,7 +267,16 @@ void m1n1_main(void)
 
     firmware_init();
 
+#ifdef T6050_MTP_RSV
+    /* Record iBoot's DART-mtp tables and pages before anything is written to the heap. */
+    if (chip_id == T6050)
+        kboot_t6050_dart_mtp_scan();
+#endif
     heapblock_init();
+#ifdef T6050_MTP_RSV
+    if (chip_id == T6050)
+        kboot_t6050_limit_heap();
+#endif
 
     if (chip_id == T8152) {
         j873g_run_proxy();

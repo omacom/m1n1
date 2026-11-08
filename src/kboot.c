@@ -5605,6 +5605,213 @@ static int dt_set_pmp_t8122(void)
     return 0;
 }
 
+#ifdef T6050_MTP_RSV
+/*
+ * T6050 (opt-in build switch): preserve iBoot's live DART-mtp SID-0 page tables and every RAM page
+ * they map. On a J714s whose Linux keeps iBoot's MTP DART session, a kernel that reused those pages
+ * lost MTP (RTKit -62, no built-in keyboard/trackpad). The walk is read-only, runs before
+ * heapblock_init() and records ranges in static storage; the heap is capped below them,
+ * top_of_memory_alloc() refuses them, gz/xz inflate is bounded, and kboot re-checks the root and
+ * emits no-map nodes. Any LIMIT/overflow/overlap refuses the OS.
+ */
+#define T6050_DART_MTP_PA     0x294800000UL /* checked against the ADT reg */
+#define T6050_WALK_MAX_TABLES 64
+#define T6050_WALK_MAX_LEAVES 16384
+#define T6050_MTP_MAX_RANGES  256
+
+static struct {
+    u64 start, end;
+} t6050_mtp_ranges[T6050_MTP_MAX_RANGES];
+static int t6050_mtp_nranges;
+static int t6050_mtp_state; /* 0 not run, 1 ok, 2 no DART-mtp translation, -1 failed */
+static u64 t6050_mtp_root, t6050_mtp_rootsum, t6050_heap_base_at_init;
+
+static bool t6050_in_ram(u64 pa)
+{
+    u64 lo = cur_boot_args.phys_base, hi = lo + cur_boot_args.mem_size;
+
+    return pa >= lo && pa + SZ_16K <= hi && !(pa & (SZ_16K - 1));
+}
+
+static bool t6050_mtp_add(u64 pa, u64 size)
+{
+    int n = t6050_mtp_nranges;
+
+    if (n && t6050_mtp_ranges[n - 1].end == pa) {
+        t6050_mtp_ranges[n - 1].end += size;
+        return true;
+    }
+    if (n >= T6050_MTP_MAX_RANGES)
+        return false;
+    t6050_mtp_ranges[n].start = pa;
+    t6050_mtp_ranges[n].end = pa + size;
+    t6050_mtp_nranges++;
+    return true;
+}
+
+static u64 t6050_mtp_sum(u64 root)
+{
+    const u64 *l1 = (const u64 *)root;
+    u64 sum = 0;
+
+    for (int i = 0; i < 2048; i++)
+        sum += l1[i];
+    return sum;
+}
+
+bool kboot_t6050_mtp_meets(u64 start, u64 end)
+{
+    if (t6050_mtp_state < 0)
+        return true; /* walk failed: nothing above the heap is known to be safe */
+    for (int i = 0; i < t6050_mtp_nranges; i++)
+        if (t6050_mtp_ranges[i].start < end && t6050_mtp_ranges[i].end > start)
+            return true;
+    return false;
+}
+
+/* Read-only walk of DART-mtp SID 0 (APPLE_DART2 PTEs, 16K tables, 3 levels). No malloc. */
+int kboot_t6050_dart_mtp_scan(void)
+{
+    int path[8];
+    u64 base = 0, size = 0, root = 0;
+    int node = adt_path_offset_trace(adt, "/arm-io/dart-mtp", path);
+
+    t6050_mtp_nranges = 0;
+    if (node < 0 || adt_get_reg(adt, path, "reg", 0, &base, &size) || base != T6050_DART_MTP_PA ||
+        size < 0x1500) {
+        printf("T6050: DART-mtp not at 0x%lx in the ADT: nothing to preserve\n", T6050_DART_MTP_PA);
+        t6050_mtp_state = 2;
+        return 0;
+    }
+    u32 tcr = read32(base + 0x1000), ttbr = read32(base + 0x1400);
+    root = (u64)(ttbr >> 2) << 14;
+
+    if (!(tcr & 1) || !(ttbr & 1)) {
+        printf("T6050: DART-mtp SID 0 not translating (tcr %x ttbr %x)\n", tcr, ttbr);
+        t6050_mtp_state = 2;
+        return 0;
+    }
+    if (!t6050_in_ram(root))
+        goto fail;
+
+    int tables = 1, leaves = 0, other = 0, bad = 0;
+    const u64 *l1 = (const u64 *)root;
+
+    t6050_mtp_root = root;
+    t6050_mtp_rootsum = t6050_mtp_sum(root);
+    if (!t6050_mtp_add(root, SZ_16K))
+        goto fail;
+    for (int i = 0; i < 2048; i++) {
+        if (!(l1[i] & 1))
+            continue;
+        u64 t2 = (l1[i] & GENMASK(37, 10)) << 4;
+        if (tables >= T6050_WALK_MAX_TABLES)
+            goto fail;
+        if (!t6050_in_ram(t2)) {
+            bad++;
+            continue;
+        }
+        tables++;
+        if (!t6050_mtp_add(t2, SZ_16K))
+            goto fail;
+        const u64 *l2 = (const u64 *)t2;
+        for (int j = 0; j < 2048; j++) {
+            if (!(l2[j] & 1))
+                continue;
+            u64 t3 = (l2[j] & GENMASK(37, 10)) << 4;
+            if (tables >= T6050_WALK_MAX_TABLES)
+                goto fail;
+            if (!t6050_in_ram(t3)) {
+                bad++;
+                continue;
+            }
+            tables++;
+            if (!t6050_mtp_add(t3, SZ_16K))
+                goto fail;
+            const u64 *l3 = (const u64 *)t3;
+            for (int k = 0; k < 2048; k++) {
+                if (!(l3[k] & 1))
+                    continue;
+                if (leaves + other >= T6050_WALK_MAX_LEAVES)
+                    goto fail;
+                u64 pa = (l3[k] & GENMASK(37, 10)) << 4;
+                if (!t6050_in_ram(pa)) {
+                    other++;
+                    continue;
+                }
+                leaves++;
+                if (!t6050_mtp_add(pa, SZ_16K))
+                    goto fail;
+            }
+        }
+    }
+    printf("T6050: DART-mtp root 0x%lx sum 0x%lx: %d tables, %d RAM pages, %d other, %d bad, %d "
+           "ranges\n",
+           root, t6050_mtp_rootsum, tables, leaves, other, bad, t6050_mtp_nranges);
+    t6050_mtp_state = 1;
+    return 0;
+
+fail:
+    printf("T6050: DART-mtp walk failed (root 0x%lx, %d ranges): the OS will not start\n", root,
+           t6050_mtp_nranges);
+    t6050_mtp_state = -1;
+    return -1;
+}
+
+/* After heapblock_init(): keep the heap below every recorded range above its base. */
+void kboot_t6050_limit_heap(void)
+{
+    u64 heap = heapblock_high_water(), limit = 0;
+
+    t6050_heap_base_at_init = heap;
+    for (int i = 0; i < t6050_mtp_nranges; i++) {
+        if (t6050_mtp_ranges[i].end <= heap)
+            continue;
+        if (t6050_mtp_ranges[i].start <= heap) {
+            printf("T6050: DART-mtp range [0x%lx, 0x%lx) holds the heap base\n",
+                   t6050_mtp_ranges[i].start, t6050_mtp_ranges[i].end);
+            t6050_mtp_state = -1;
+            limit = heap;
+            break;
+        }
+        if (!limit || t6050_mtp_ranges[i].start < limit)
+            limit = t6050_mtp_ranges[i].start;
+    }
+    if (limit)
+        heapblock_set_limit((void *)limit);
+}
+
+/* After dt_set_memory(): re-check and reserve every range no-map (clipped to the boot RAM). */
+static int dt_reserve_t6050_dart_mtp(void)
+{
+    u64 heap_end = heapblock_high_water();
+    u64 lo = cur_boot_args.phys_base;
+
+    if (t6050_mtp_state == 2)
+        return 0;
+    if (t6050_mtp_state != 1)
+        bail("FDT: T6050: DART-mtp walk did not complete before the heap (state %d)\n",
+             t6050_mtp_state);
+    if (t6050_mtp_sum(t6050_mtp_root) != t6050_mtp_rootsum)
+        bail("FDT: T6050: DART-mtp root 0x%lx changed since the early walk\n", t6050_mtp_root);
+    for (int i = 0; i < t6050_mtp_nranges; i++) {
+        u64 start = t6050_mtp_ranges[i].start, end = t6050_mtp_ranges[i].end;
+        char name[40];
+
+        if (start < heap_end && end > t6050_heap_base_at_init)
+            bail("FDT: T6050: DART-mtp range [0x%lx, 0x%lx) meets the heap [0x%lx, 0x%lx)\n", start,
+                 end, t6050_heap_base_at_init, heap_end);
+        if (start < lo)
+            continue; /* t6050_in_ram() recorded none below phys_base */
+        snprintf(name, sizeof(name), "dart-mtp-pages@%lx", start);
+        if (dt_get_or_add_reserved_mem(name, "apple,dart-mem", true, start, end - start) < 0)
+            bail("FDT: T6050: couldn't reserve DART-mtp range [0x%lx, 0x%lx)\n", start, end);
+    }
+    printf("FDT: T6050: %d DART-mtp ranges reserved no-map\n", t6050_mtp_nranges);
+    return 0;
+}
+#endif
+
 static int dt_set_sep(void)
 {
     int aliases = fdt_path_offset(dt, "/aliases");
@@ -6619,6 +6826,11 @@ int kboot_prepare_dt(void *fdt)
      */
     if (dt_set_memory())
         return -1;
+#ifdef T6050_MTP_RSV
+    /* After dt_set_memory(): these lie inside the usable RAM it just published. */
+    if (chip_id == T6050 && dt_reserve_t6050_dart_mtp())
+        return -1;
+#endif
 
     /* Last, so that its 15K never takes room the steps above need. */
     if (dt_set_pmp_t6030())

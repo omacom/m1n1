@@ -5,6 +5,7 @@
 #include "chainload.h"
 #include "adt.h"
 #include "heapblock.h"
+#include "kboot.h"
 #include "malloc.h"
 #include "memory.h"
 #include "nvme.h"
@@ -174,6 +175,17 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
         image_end = new_base + image_size;
         fw_base = image_end;
     }
+#ifdef T6050_MTP_RSV
+    /* The stub copies the image onto [new_base, +copy_size); refuse before any
+     * write if that meets iBoot's live DART-mtp tables or a page they map. */
+    if (chip_id == T6050 && kboot_t6050_mtp_meets(new_base, new_base + copy_size)) {
+        printf("chainload: destination [0x%lx, 0x%lx) holds iBoot DART-mtp pages\n", new_base,
+               new_base + copy_size);
+        free(new_image);
+        free(parked);
+        return -1;
+    }
+#endif
     memset(new_image, 0, copy_size);
     memcpy(new_image, image, size);
     if (run_base)

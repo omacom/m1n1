@@ -34,6 +34,19 @@ void heapblock_set_limit(void *limit)
     printf("Heap limit: %p (%ld MiB)\n", limit, ((u8 *)limit - (u8 *)heap_base) >> 20);
 }
 
+#ifdef T6050_MTP_RSV
+/* Bytes left below heap_limit at the next `align`-aligned block (decompression writes before it
+ * reserves, so it must be bounded by this). */
+size_t heapblock_room(size_t align)
+{
+    uintptr_t block = (((uintptr_t)heap_base) + align - 1) & ~(align - 1);
+
+    if (!heap_limit)
+        return (size_t)-1;
+    return block >= (uintptr_t)heap_limit ? 0 : (uintptr_t)heap_limit - block;
+}
+#endif
+
 uintptr_t heapblock_high_water(void)
 {
     return (uintptr_t)heap_base;
