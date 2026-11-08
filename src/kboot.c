@@ -5335,6 +5335,20 @@ static int dt_set_display(void)
          * an owner's explicit value always wins. J514M/T6034 uses its own handoff
          * and defaults with the same independent owner choices.
          */
+        if (j516m_board(dt) && chosen_lost) {
+            /* A lost owner =0 can leave an earlier =1. Keep only live-log reservations. */
+            static const char *const switches[] = {"asahi,t6034-dcp", "asahi,t6034-dcpext",
+                                                   "asahi,t6034-dispext"};
+            int chosen = fdt_path_offset(dt, "/chosen");
+            if (chosen < 0)
+                return -1;
+            for (size_t i = 0; i < ARRAY_SIZE(switches); i++) {
+                int err = fdt_delprop(dt, chosen, switches[i]);
+                if (err && err != -FDT_ERR_NOTFOUND)
+                    return err;
+            }
+            printf("FDT: J516M: a config line was lost: no display or external handoff\n");
+        }
         ret = dt_set_display_handoff(dt);
         if (!fdt_node_check_compatible(dt, 0, "apple,t8122"))
             dt_reserve_dcpext_firmware(false);
