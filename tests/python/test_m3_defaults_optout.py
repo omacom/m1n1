@@ -102,16 +102,18 @@ static struct { int version; } os_firmware = {V26_6_2};
 #include "payload_profile.h"
 static int XzDecode(void *in, uint32_t *in_len, void *out, uint32_t *out_len) { return 0; }
 
-/* heapblock: one bump allocator */
-static u8 heap[16 << 20] __attribute__((aligned(2 << 20)));
+/*
+ * heapblock: one bump allocator that aligns addresses, as src/heapblock.c does. The macOS
+ * linker caps section alignment at 16K, so the 2MB kernel alignment comes from the slack.
+ */
+static u8 heap[18 << 20];
 static size_t heap_used;
 void *heapblock_alloc_aligned(size_t size, size_t align)
 {
-    heap_used = ALIGN_UP(heap_used, align);
-    void *r = heap + heap_used;
-    heap_used += size;
+    uintptr_t block = ALIGN_UP((uintptr_t)heap + heap_used, (uintptr_t)align);
+    heap_used = block - (uintptr_t)heap + size;
     assert(heap_used <= sizeof(heap));
-    return r;
+    return (void *)block;
 }
 
 /* kboot.c, with allocation failure on demand: the n-th calloc from the start fails */
