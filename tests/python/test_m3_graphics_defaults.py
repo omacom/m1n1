@@ -56,12 +56,22 @@ static void write_chosen(void)
         assert(!fdt_setprop(dt, node, chosen_params[i][0], chosen_params[i][1],
                             (int)strlen(chosen_params[i][1]) + 1));
 }
+/* the kernel the device tree came from: 0 an aurora15 or newer one, with the common scanout
+   aperture (a display subsystem with apple,dma-range), 1 an older one */
+static int old_kernel;
 /* a fresh device tree, as each kboot_prepare_dt() opens one; chosen_params persist */
 static void tree(const char *compat, int compat_len)
 {
     assert(!fdt_create_empty_tree(dt, sizeof(blob)));
     assert(!fdt_setprop(dt, 0, "compatible", compat, compat_len));
     assert(fdt_add_subnode(dt, 0, "chosen") >= 0);
+    int node = fdt_add_subnode(dt, 0, "display-subsystem");
+    assert(node >= 0);
+    assert(!fdt_setprop_string(dt, node, "compatible", "apple,t8122-display-subsystem"));
+    if (!old_kernel) {
+        static const unsigned char range[16] = {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0, 0, 0, 0};
+        assert(!fdt_setprop(dt, node, "apple,dma-range", range, sizeof(range)));
+    }
 }
 static void reset(const char *compat, int compat_len)
 {
@@ -186,6 +196,23 @@ int main(void)
     chosen_lost = true;
     assert(!run());
     assert(!present("asahi,t8122-dcpext") && entries() == 0);
+    /* a device tree from a kernel before aurora15 (no common scanout aperture): the plain Air
+       recipe, no dcpext; an owner's own dcpext line still stays as written */
+    old_kernel = 1;
+    RESET(J613); assert(!run()); expect_only(air, 4);
+    assert(entries() == 4 && !present("asahi,t8122-dcpext"));
+    RESET(J613);
+    assert(kboot_set_chosen("asahi,t8122-dcpext", "1") >= 0);
+    assert(!run());
+    assert(armed("asahi,t8122-dcpext") && !chosen_is_default[slot("asahi,t8122-dcpext")] && defaults() == 4);
+    /* the marker must be on the display subsystem itself: the same property elsewhere is not it */
+    RESET(J613);
+    {
+        int n = fdt_add_subnode(dt, 0, "other");
+        assert(n >= 0 && !fdt_setprop(dt, n, "apple,dma-range", "", 0));
+    }
+    assert(!run()); expect_only(air, 4);
+    old_kernel = 0;
     /* a J615 owner's own dcpext line stays as written, with no default beside it */
     RESET(J615);
     assert(kboot_set_chosen("asahi,t8122-dcpext", "1") >= 0);
@@ -660,7 +687,7 @@ def test_the_j516c_defaults_are_the_switches_the_t6031_entries_read():
     display = between(handoff, "static const struct dcp_soc dcp_soc_t6031 = {", "};")
     assert '.optin = "asahi,t6031-dcp",' in display and ".board_gate = true," in display
     assert 'dcp_boards_t6031[] = {"apple,j514c", "apple,j516c", NULL};' in handoff
-    assert '{"apple,t6031", m3_max_boards, m3_max_switches, false, m3_max_graphics},' in kboot
+    assert '{"apple,t6031", m3_max_boards, m3_max_switches, false, m3_max_graphics, NULL, NULL},' in kboot
     soc = between(gpu, "static const struct g15_soc g15_soc_t6031 = {", "};")
     assert '.optin = "asahi,t6031-gpu",' in soc
     entry = definition(gpu, "dt_set_gpu_t6031")
@@ -670,11 +697,12 @@ def test_the_j516c_defaults_are_the_switches_the_t6031_entries_read():
 
 
 def test_the_defaults_path_only_edits_the_chosen_table():
-    """No reboot, persistence or second-boot step: the helpers only read the device tree's root
-    compatible and edit the chosen table"""
+    """No reboot, persistence or second-boot step: the helpers only read the device tree (its root
+    compatible, and a node property that marks the kernel) and edit the chosen table"""
     source = (ROOT / "src/kboot.c").read_text()
     allowed = {"dt_drop_m3_defaults", "dt_drop_m3_graphics", "kboot_chosen_param",
                "kboot_set_chosen", "kboot_delete_chosen", "fdt_node_check_compatible", "printf",
+               "fdt_node_offset_by_compatible", "fdt_getprop",
                "strcmp", "strncmp", "strlen", "sizeof", "while", "for", "if"}
     for name, signature in (("dt_set_m3_defaults", "static int dt_set_m3_defaults(void)\n{"),
                             ("dt_drop_m3_defaults", "static void dt_drop_m3_defaults(void)\n{"),
