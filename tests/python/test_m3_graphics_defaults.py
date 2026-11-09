@@ -472,15 +472,17 @@ int main(void)
     assert(entries() == 5 && defaults() == 2 && !chosen_is_default[slot("asahi,t6031-gpu")]);
     assert(!strcmp(chosen_params[0][0], "test,first") && !strcmp(chosen_params[1][0], "test,later"));
 
-    /* allocation failure part way through: no partial recipe, no crash */
-    for (int fail = 0; fail < 8; fail++) {
+    /* allocation failure part way through: no partial recipe, no crash. Each of the J613's five
+       switches takes two allocations, so failures 0..9 hit every one of them, the dcpext line's
+       included (8, 9: the four lines before it must come out again); 10 is no failure at all */
+    for (int fail = 0; fail <= 10; fail++) {
         RESET("apple,j613\0apple,t8122\0apple,arm-platform");
         calloc_fail_in = fail;
         assert(!run());
         calloc_fail_in = -1;
         int on = 0;
-        for (int i = 0; i < 4; i++) on += present(air[i]);
-        assert(on == 0 || on == 4);
+        for (int i = 0; i < 5; i++) on += present(j613[i]);
+        assert(on == (fail < 10 ? 0 : 5));
         assert(entries() == on);
         for (int i = 0; i < entries(); i++) assert(chosen_params[i][0] && chosen_params[i][1]);
     }
