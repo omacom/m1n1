@@ -33,6 +33,8 @@ bool rtkit_has_owned_buffers(const rtkit_dev_t *rtk);
 bool rtkit_start_ep(rtkit_dev_t *rtk, u8 ep);
 bool rtkit_boot(rtkit_dev_t *rtk);
 bool rtkit_boot_timed(rtkit_dev_t *rtk, u32 timeout_usec);
+/* rtkit_boot()'s HELLO and endpoint-map wait in microseconds; 0 restores the 1 s default */
+void rtkit_set_boot_timeout(u64 us);
 u32 rtkit_get_timeout(rtkit_dev_t *rtk);
 
 bool rtkit_can_recv(rtkit_dev_t *rtk);

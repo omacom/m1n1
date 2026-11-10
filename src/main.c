@@ -8,6 +8,7 @@
 #include "adt.h"
 #include "aic.h"
 #include "boot_options.h"
+#include "chainload.h"
 #include "cpufreq.h"
 #include "display.h"
 #include "exception.h"
@@ -15,6 +16,7 @@
 #include "firmware.h"
 #include "gxf.h"
 #include "heapblock.h"
+#include "kboot.h"
 #include "mcc.h"
 #include "memory.h"
 #include "nvme.h"
@@ -335,11 +337,20 @@ next_stage:
 #ifndef BRINGUP
     if (chip_id != T8152) {
         usb_iodev_shutdown();
+        usb_t6050_host_prep();
         /* Its firmware may still use memory the next stage will reuse. */
         if (display_shutdown(DCP_SLEEP_IF_EXTERNAL) < 0) {
             printf("Display handoff failed; returning to proxy\n");
             uartproxy_run(NULL);
             panic("Display handoff failed\n");
+        }
+        usb_t6050_host_record();
+        /* The steps above can grow the heap after the next stage's boundary was set. */
+        chainload_retain_late_heap();
+        if (kboot_retain_late_heap()) {
+            printf("FDT: could not reserve the late heap; returning to proxy\n");
+            uartproxy_run(NULL);
+            panic("FDT: could not reserve the late heap\n");
         }
     }
 #ifdef USE_FB

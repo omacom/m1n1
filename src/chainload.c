@@ -21,6 +21,12 @@ void rust_free_image(void *image, size_t size);
 extern u8 _chainload_stub_start[];
 extern u8 _chainload_stub_end[];
 
+/* The staged copy of the next stage's boot_args, and the next_stage.args[0] that runs it */
+static struct boot_args *staged_boot_args;
+static u64 staged_args0;
+/* The heap high-water once the staging is done */
+static u64 staged_heap_end;
+
 _Static_assert(sizeof(struct chainload_header) == CHAINLOAD_HDR_SIZE, "load header size");
 _Static_assert(offsetof(struct chainload_header, footprint) == CHAINLOAD_HDR_FOOTPRINT_OFF,
                "load header footprint offset");
@@ -56,6 +62,7 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
 
     printf("chainload: Preparing image...\n");
     next_stage.entry = NULL;
+    staged_boot_args = NULL;
     if (!image || !size || (chip_id == T8140 && ro_status != 1) ||
         cur_boot_args.phys_base > UINT64_MAX - cur_boot_args.mem_size)
         return -1;
@@ -246,12 +253,27 @@ int chainload_image(void *image, size_t size, char **vars, size_t var_cnt)
                footprint, run_base);
     next_stage.entry = stub;
     next_stage.args[0] = fw_base + fw_bootargs_off;
+    staged_boot_args = new_boot_args;
+    staged_args0 = next_stage.args[0];
+    staged_heap_end = heapblock_high_water();
     next_stage.args[1] = (u64)new_image;
     next_stage.args[2] = new_base;
     next_stage.args[3] = copy_size;
     next_stage.args[4] = new_base + CHAINLOAD_ENTRY_OFFSET;
     next_stage.restore_logo = false;
     return 0;
+}
+
+/* The last steps before the jump can still grow the heap; keep it from the next stage. */
+void chainload_retain_late_heap(void)
+{
+    if (!next_stage.entry || !staged_boot_args || next_stage.args[0] != staged_args0)
+        return;
+    u64 heap_end = heapblock_high_water();
+    if (heap_end > staged_heap_end && heap_end > staged_boot_args->top_of_kernel_data) {
+        printf("chainload: late heap up to 0x%lx kept from the next stage\n", heap_end);
+        staged_boot_args->top_of_kernel_data = heap_end;
+    }
 }
 
 #ifdef CHAINLOADING

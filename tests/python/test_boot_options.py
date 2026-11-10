@@ -52,3 +52,38 @@ int main(void) {
     binary = tmp_path/'test'
     subprocess.run(shlex.split(os.environ.get('CC', 'cc')) + ['-std=c11','-Wall','-Wextra','-Werror','-I',str(ROOT/'src'),str(test),str(ROOT/'src/boot_options.c'),'-o',str(binary)],check=True)
     subprocess.run([str(binary)],check=True)
+
+
+def test_wdt_keep_option(tmp_path):
+    test = tmp_path / 'test.c'
+    test.write_text(r'''
+#include "boot_options.h"
+#include <assert.h>
+#include <string.h>
+int main(void) {
+    const char *yes[] = {"m1n1.wdt=keep", "-v m1n1.wdt=keep", "chainload.x=1\tm1n1.wdt=keep\n"};
+    const char *no[] = {"", "m1n1.wdt", "m1n1.wdt=", "m1n1.wdt=keeps", "m1n1.wdt=off",
+                        "xm1n1.wdt=keep", "m1n1-debug m1n1-proxy"};
+    for (unsigned i=0; i<sizeof(yes)/sizeof(*yes); i++) {
+        boot_options_init(yes[i], strlen(yes[i])+1);
+        assert(m1n1_wdt_keep_enabled());
+    }
+    for (unsigned i=0; i<sizeof(no)/sizeof(*no); i++) {
+        boot_options_init(no[i], strlen(no[i])+1);
+        assert(!m1n1_wdt_keep_enabled());
+    }
+    /* Independent of the stage: a chainloaded stage 2 is where it matters */
+    boot_options_init("m1n1.wdt=keep m1n1-proxy", 25);
+    boot_options_set_stage1(false);
+    assert(m1n1_wdt_keep_enabled() && !m1n1_proxy_enabled());
+    char truncated[] = {'m','1','n','1','.','w','d','t','=','k','e','e','p'};
+    boot_options_init(truncated, sizeof(truncated));
+    assert(!m1n1_wdt_keep_enabled());
+    boot_options_init(0, 0);
+    assert(!m1n1_wdt_keep_enabled());
+    return 0;
+}
+''')
+    binary = tmp_path/'test'
+    subprocess.run(shlex.split(os.environ.get('CC', 'cc')) + ['-std=c11','-Wall','-Wextra','-Werror','-I',str(ROOT/'src'),str(test),str(ROOT/'src/boot_options.c'),'-o',str(binary)],check=True)
+    subprocess.run([str(binary)],check=True)

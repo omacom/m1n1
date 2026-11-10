@@ -2,6 +2,7 @@
 
 #include "wdt.h"
 #include "adt.h"
+#include "boot_options.h"
 #include "types.h"
 #include "utils.h"
 
@@ -27,6 +28,16 @@ void wdt_disable(void)
     }
 
     printf("Primary WDT register @ 0x%lx\n", wdt_base);
+    /*
+     * A chainloading stage that armed the watchdog for this one passes m1n1.wdt=keep in the
+     * boot-args command line: leave both watchdogs as they are, so a hang before the OS takes the
+     * watchdog over still resets the machine into that stage's fallback. wdt_reboot() works as
+     * usual, since wdt_base is known.
+     */
+    if (m1n1_wdt_keep_enabled()) {
+        printf("Primary WDT left armed (m1n1.wdt=keep)\n");
+        return;
+    }
     write32(wdt_base + WDT_CTL, 0);
     printf("Primary WDT disabled\n");
 

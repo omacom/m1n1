@@ -20,6 +20,7 @@
 #include "kboot_atc.h"
 #include "kboot_display_facts.h"
 #include "kboot_gpu_t8122.h"
+#include "kboot_n1.h"
 #include "kboot_pmp_t8122.h"
 #include "kboot_t6031.h"
 #include "malloc.h"
@@ -53,6 +54,8 @@
 
 static void *dt = NULL;
 static int dt_bufsize = 0;
+/* End of the retained heap reservation (T8140, T6050); 0 when the heap is not retained */
+static u64 retained_heap_end = 0;
 static void *initrd_start = NULL;
 static size_t initrd_size = 0;
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
@@ -458,6 +461,12 @@ static const char *kboot_chosen_param(const char *name)
         if (!strcmp(chosen_params[i][0], name))
             return chosen_params[i][1] ? chosen_params[i][1] : "";
     return NULL;
+}
+
+/* kboot_chosen_param() for the SoC helpers in other files (kboot_n1.c) */
+const char *kboot_get_chosen(const char *name)
+{
+    return kboot_chosen_param(name);
 }
 
 /*
@@ -5273,10 +5282,420 @@ static void dt_set_j514s_native(void)
             printf("FDT: J514S DCPEXT%u handoff refused\n", n);
 }
 
+/*
+ * T6050 (M5 Pro/Max, J716s): every running coprocessor's log segment, and the internal display as
+ * iBoot leaves it. Both are fail-soft: a failure is logged and leaves the DT as it was.
+ */
+
+/* One copy of each log prefix: the raw image's file part has little room left (m1n1-raw.ld) */
+static const char t6050_fdt_pfx[] = "FDT: T6050: ";
+#define t6050_fdt_log(fmt, ...) printf("%s" fmt, t6050_fdt_pfx, ##__VA_ARGS__)
+
+/* A copy of the DT, for t6050_dt_done() */
+static void *t6050_dt_save(void)
+{
+    void *saved = malloc(dt_bufsize);
+
+    if (saved)
+        memcpy(saved, dt, dt_bufsize);
+    else
+        t6050_fdt_log("no memory for a DT copy\n");
+    return saved;
+}
+
+/* Undo every DT edit since t6050_dt_save() unless @ok; frees the copy either way */
+static bool t6050_dt_done(void *saved, bool ok)
+{
+    if (!ok)
+        memcpy(dt, saved, dt_bufsize);
+    free(saved);
+    return ok;
+}
+
+/*
+ * The first /memreserve/ entry or enabled /reserved-memory node that overlaps [base, base+size):
+ * its name ("/memreserve/" for an entry), or NULL if none does.
+ */
+static const char *t6050_resv_overlap(u64 base, u64 size, u64 *a, u64 *s)
+{
+    int resv, node, n = fdt_num_mem_rsv(dt);
+
+    for (int i = 0; i < n; i++)
+        if (!fdt_get_mem_rsv(dt, i, a, s) && base < *a + *s && *a < base + size)
+            return "/memreserve/";
+    resv = fdt_path_offset(dt, "/reserved-memory");
+    if (resv < 0)
+        return NULL;
+    fdt_for_each_subnode(node, dt, resv)
+    {
+        const char *status = fdt_getprop(dt, node, "status", NULL);
+        int len = 0;
+        const fdt64_t *reg = fdt_getprop(dt, node, "reg", &len);
+
+        if (status && !strcmp(status, "disabled"))
+            continue;
+        for (int k = 0; reg && (k + 2) * (int)sizeof(*reg) <= len; k += 2) {
+            *a = fdt64_ld(&reg[k]);
+            *s = fdt64_ld(&reg[k + 1]);
+            if (base < *a + *s && *a < base + size)
+                return fdt_get_name(dt, node, NULL) ?: "?";
+        }
+    }
+    return NULL;
+}
+
+/*
+ * iBoot puts the __OS_LOG segment (segment-ranges flags 0xa) of each coprocessor it leaves running
+ * (dcp, dcpext0..3, aop, mtp, auss-cpu0 on a J716s) in DRAM it then hands to the OS, and those
+ * coprocessors keep writing it. On a J716s 27.3 beta 1 stub they sit at
+ * 0x10006020000..0x10006126514, inside the usable RAM this loader publishes. Reserve each one,
+ * no-map, by physical address. A segment that already overlaps a /memreserve/ entry or another
+ * reservation is left alone and logged. Nothing is written to the hardware. kboot_display_handoff.c
+ * reserves only the dcp and dcpextN logs, through its per-SoC handoff; on T6050 every coprocessor
+ * found in the ADT is covered here.
+ */
+static int dt_reserve_t6050_oslogs_of(int at, u64 ram_lo, u64 ram_hi)
+{
+    u32 len = 0;
+    int n = 0;
+    const struct adt_segment_ranges *seg = adt_getprop(adt, at, "segment-ranges", &len);
+
+    if (!seg || !len || len % sizeof(*seg))
+        return 0;
+    for (u32 i = 0; i < len / sizeof(*seg); i++) {
+        struct adt_segment_ranges r;
+        memcpy(&r, &seg[i], sizeof(r));
+        if (r.unk != 0xa || !r.size || r.phys >= ram_hi || r.phys + r.size <= ram_lo)
+            continue;
+        u64 base = ALIGN_DOWN(r.phys, SZ_16K);
+        u64 size = ALIGN_UP(r.phys + r.size, SZ_16K) - base;
+        u64 a, s;
+        char name[32];
+        snprintf(name, sizeof(name), "os-log@%lx", base);
+        const char *other = t6050_resv_overlap(base, size, &a, &s);
+        /* The owner (dcp, aop) and its nub (iop-dcp-nub) repeat the same segments. */
+        if (other && !strcmp(other, name))
+            continue;
+        if (other) {
+            t6050_fdt_log("%s __OS_LOG 0x%lx+0x%lx overlaps %s 0x%lx+0x%lx, skipped\n",
+                          adt_get_name(adt, at), base, size, other, a, s);
+            continue;
+        }
+        if (dt_get_or_add_reserved_mem(name, "apple,os-log", true, base, size) < 0)
+            return -1;
+        t6050_fdt_log("%s __OS_LOG 0x%lx+0x%lx reserved\n", adt_get_name(adt, at), base, size);
+        n++;
+    }
+    return n;
+}
+
+static void dt_reserve_t6050_oslogs(void)
+{
+    u64 ram_lo = cur_boot_args.phys_base, ram_hi = ram_lo + cur_boot_args.mem_size;
+    int total = 0, dev = adt_path_offset(adt, "/arm-io");
+    void *saved;
+
+    if (dev < 0 || !(saved = t6050_dt_save()))
+        return;
+
+    ADT_FOREACH_CHILD(adt, dev)
+    {
+        int n = dt_reserve_t6050_oslogs_of(dev, ram_lo, ram_hi);
+        int nub = adt_get_child_count(adt, dev) ? adt_first_child_offset(adt, dev) : -1;
+        for (int k = nub < 0 ? 0 : adt_get_child_count(adt, dev); n >= 0 && k--;
+             nub = adt_next_sibling_offset(adt, nub)) {
+            int m = dt_reserve_t6050_oslogs_of(nub, ram_lo, ram_hi);
+            n = m < 0 ? m : n + m;
+        }
+        if (n < 0) {
+            t6050_dt_done(saved, false);
+            t6050_fdt_log("__OS_LOG reservation failed, none reserved\n");
+            return;
+        }
+        total += n;
+    }
+    t6050_dt_done(saved, true);
+    t6050_fdt_log("reserved %d coprocessor __OS_LOG segments\n", total);
+}
+
+/*
+ * The internal display (dcp + disp0), read as iBoot left it: the ASC's CPU control and status, the
+ * PROTECT of dart-dcp and dart-disp0, and the TCR/TTBR of the streams the ADT gives page tables
+ * (DCP SID 23 on dart-dcp; scanout SID 0 and PIODMA SID 16 on dart-disp0) beside the ADT's
+ * l1-tt-N. Every read is guarded; nothing is written. Logged on every T6050 boot.
+ *
+ * With chosen.asahi,t6050-display=1, and only when the DCP runs and both DARTs are locked with
+ * those three streams translating on four-level tables at the ADT's roots: reserve /vram (no-map,
+ * "framebuffer"), give it to the dcp node and the display subsystem as their "framebuffer"
+ * memory-region, publish the stub's firmware as apple,firmware-version/-compat, and enable the
+ * dcp node, its mailbox, both DARTs and the display subsystem, all of which the DT carries
+ * disabled. This is what the firmware-27 DCP driver expects of the loader: it has no handoff
+ * marker, adopts the running DCP and the locked DARTs, and refuses a firmware-compat it has no
+ * method table for, at probe and before it touches the DCP. The DART tables, firmware segments and
+ * /vram lie above the RAM this loader publishes, so nothing else needs reserving. The DARTs are
+ * never initialised, walked or shut down here (dt_carveout_reserved_regions() would do all three,
+ * and the kboot_display_handoff.c walk is written for two-level tables; these are four-level).
+ *
+ * apple,firmware-compat names the DCP interface the stub's firmware implements: the stub's own
+ * version, except that the 27.3 beta 1 stub publishes <27 3 0>, the interface read from its DCP
+ * firmware (IOMFB method tags and swap layout). chosen.asahi,t6050-dcp-compat=27.0.0 publishes
+ * <27 0 0> instead: that claims an ABI this firmware was not built for; experiment only.
+ */
+#define T6050_ASC_CPU_CONTROL     0x44
+#define T6050_ASC_CPU_STATUS      0x48
+#define T6050_ASC_CPU_CONTROL_RUN BIT(4)
+#define T6050_DART_PROTECT        0x200
+#define T6050_DART_PROTECT_LOCK   BIT(0)
+#define T6050_DART_TCR(sid)       (0x1000 + 4 * (sid))
+#define T6050_DART_TTBR(sid)      (0x1400 + 4 * (sid))
+#define T6050_DART_TCR_TRANSLATE  BIT(0)
+#define T6050_DART_TCR_FOUR_LEVEL BIT(3)
+#define T6050_DART_TTBR_VALID     BIT(0)
+#define T6050_DART_TTBR_ADDR      GENMASK(29, 2)
+#define T6050_DART_TTBR_SHIFT     14
+
+static const char t6050_dcp_pfx[] = "DCP: T6050: ";
+#define t6050_dcp_log(fmt, ...) printf("%s" fmt, t6050_dcp_pfx, ##__VA_ARGS__)
+
+struct t6050_disp_sid {
+    u32 sid, tcr, ttbr;
+    u64 root, l1;
+    bool ok;
+};
+
+struct t6050_disp_state {
+    u64 coproc, dart_dcp, dart_disp;
+    u32 ctl, st, protect_dcp, protect_disp;
+    bool read, running;
+    struct t6050_disp_sid sid[3];
+};
+
+static int t6050_adt_reg(const char *path, int idx, u64 *addr)
+{
+    int p[8];
+
+    if (adt_path_offset_trace(adt, path, p) < 0)
+        return -1;
+    return adt_get_reg(adt, p, "reg", idx, addr, NULL) < 0 ? -1 : 0;
+}
+
+/* read32() with an exception guard: false if the access faulted */
+static bool t6050_read32(u64 addr, u32 *val)
+{
+    int before = exc_count;
+
+    exc_guard = GUARD_SKIP | GUARD_SILENT;
+    *val = read32(addr);
+    sysop("dsb sy");
+    sysop("isb");
+    exc_guard = GUARD_OFF;
+    return exc_count == before;
+}
+
+static bool t6050_disp_stream(const char *dart_path, u64 base, struct t6050_disp_sid *s)
+{
+    char prop[16];
+    u64 l1[2] = {0, 0};
+    int node = adt_path_offset(adt, dart_path);
+
+    snprintf(prop, sizeof(prop), "l1-tt-%u", s->sid);
+    if (node >= 0 && ADT_GETPROP_ARRAY(adt, node, prop, l1) == sizeof(l1))
+        s->l1 = l1[0];
+    if (!t6050_read32(base + T6050_DART_TCR(s->sid), &s->tcr) ||
+        !t6050_read32(base + T6050_DART_TTBR(s->sid), &s->ttbr)) {
+        t6050_dcp_log("%s SID %u: TCR/TTBR read faulted\n", dart_path, s->sid);
+        return false;
+    }
+    s->root = (u64)FIELD_GET(T6050_DART_TTBR_ADDR, s->ttbr) << T6050_DART_TTBR_SHIFT;
+    s->ok = s->tcr == (T6050_DART_TCR_TRANSLATE | T6050_DART_TCR_FOUR_LEVEL) &&
+            (s->ttbr & T6050_DART_TTBR_VALID) && s->l1 && s->root == s->l1;
+    t6050_dcp_log("%s SID %u: TCR 0x%x TTBR 0x%x (root 0x%lx), ADT l1-tt 0x%lx: %s\n", dart_path,
+                  s->sid, s->tcr, s->ttbr, s->root, s->l1,
+                  !(s->ttbr & T6050_DART_TTBR_VALID) ? "no table"
+                  : !s->ok                           ? "NOT four-level on the ADT's"
+                                                     : "four-level, the ADT's");
+    return true;
+}
+
+static void t6050_disp_read(struct t6050_disp_state *e)
+{
+    memset(e, 0, sizeof(*e));
+    e->sid[0].sid = 23;
+    e->sid[1].sid = 0;
+    e->sid[2].sid = 16;
+    if (t6050_adt_reg("/arm-io/dcp", 0, &e->coproc) ||
+        t6050_adt_reg("/arm-io/dart-dcp", 0, &e->dart_dcp) ||
+        t6050_adt_reg("/arm-io/dart-disp0", 0, &e->dart_disp)) {
+        t6050_dcp_log("dcp, dart-dcp or dart-disp0 not in the ADT\n");
+        return;
+    }
+    if (!t6050_read32(e->coproc + T6050_ASC_CPU_CONTROL, &e->ctl) ||
+        !t6050_read32(e->coproc + T6050_ASC_CPU_STATUS, &e->st) ||
+        !t6050_read32(e->dart_dcp + T6050_DART_PROTECT, &e->protect_dcp) ||
+        !t6050_read32(e->dart_disp + T6050_DART_PROTECT, &e->protect_disp)) {
+        t6050_dcp_log("ASC or DART PROTECT read faulted\n");
+        return;
+    }
+    e->running = e->ctl & T6050_ASC_CPU_CONTROL_RUN;
+    t6050_dcp_log("dcp at 0x%lx: CPU_CONTROL 0x%x (%s) CPU_STATUS 0x%x; PROTECT dart-dcp 0x%x "
+                  "dart-disp0 0x%x\n",
+                  e->coproc, e->ctl, e->running ? "running" : "stopped", e->st, e->protect_dcp,
+                  e->protect_disp);
+    if (!t6050_disp_stream("/arm-io/dart-dcp", e->dart_dcp, &e->sid[0]) ||
+        !t6050_disp_stream("/arm-io/dart-disp0", e->dart_disp, &e->sid[1]) ||
+        !t6050_disp_stream("/arm-io/dart-disp0", e->dart_disp, &e->sid[2]))
+        return;
+    e->read = true;
+}
+
+/* The FDT node the first phandle of @prop names */
+static int t6050_fdt_ref(int node, const char *prop)
+{
+    int len;
+    const fdt32_t *cell = fdt_getprop(dt, node, prop, &len);
+
+    return cell && len >= 4 ? fdt_node_offset_by_phandle(dt, fdt32_ld(cell)) : -1;
+}
+
+static bool t6050_chosen_is(const char *prop, const char *want)
+{
+    int chosen = fdt_path_offset(dt, "/chosen"), len = 0;
+    const char *val = chosen >= 0 ? fdt_getprop(dt, chosen, prop, &len) : NULL;
+
+    return val && len == (int)strlen(want) + 1 && !strcmp(val, want);
+}
+
+/* The DT nodes the handoff changes, by phandle (offsets move as properties are added) */
+struct t6050_disp_nodes {
+    u32 dcp, disp, dart_dcp, dart_disp, mbox;
+};
+
+/* Every DT edit of the handoff; on failure the caller restores the DT */
+static int t6050_disp_publish(const struct t6050_disp_nodes *ph, u64 vram, u64 vram_size,
+                              const struct fw_version_info *compat)
+{
+    const u32 on[] = {ph->dcp, ph->disp, ph->dart_dcp, ph->dart_disp, ph->mbox};
+    const u32 mr[] = {ph->dcp, ph->disp};
+    char name[32];
+
+    snprintf(name, sizeof(name), "vram@%lx", vram);
+    int fb = dt_get_or_add_reserved_mem(name, "framebuffer", true, vram, vram_size);
+    if (fb < 0)
+        return -1;
+    u32 ph_fb = fdt_get_phandle(dt, fb);
+    for (unsigned i = 0; i < ARRAY_SIZE(mr); i++) {
+        int at = fdt_node_offset_by_phandle(dt, mr[i]);
+        if (at < 0 || fdt_setprop_u32(dt, at, "memory-region", ph_fb) ||
+            fdt_setprop_string(dt, at, "memory-region-names", "framebuffer"))
+            return -1;
+    }
+    if (firmware_set_fdt(dt, fdt_node_offset_by_phandle(dt, ph->dcp), "apple,firmware-version",
+                         &os_firmware) ||
+        firmware_set_fdt(dt, fdt_node_offset_by_phandle(dt, ph->dcp), "apple,firmware-compat",
+                         compat))
+        return -1;
+    for (unsigned i = 0; i < ARRAY_SIZE(on); i++) {
+        int at = fdt_node_offset_by_phandle(dt, on[i]);
+        if (at < 0 || fdt_setprop_string(dt, at, "status", "okay"))
+            return -1;
+    }
+    return 0;
+}
+
+static void dt_set_display_t6050(void)
+{
+    static const struct fw_version_info compat_27_0 = {V27_0, "27.0", {27, 0, 0}, 3, "override"};
+    static const struct fw_version_info compat_27_3 = {V27_3B1, "27.3", {27, 3, 0}, 3, "compat"};
+    struct t6050_disp_state e;
+
+    t6050_disp_read(&e);
+
+    if (!t6050_chosen_is("asahi,t6050-display", "1")) {
+        t6050_dcp_log("not armed (chosen.asahi,t6050-display)\n");
+        return;
+    }
+    if (os_firmware.version == V_UNKNOWN) {
+        t6050_dcp_log("OS firmware %s unknown: no handoff\n", os_firmware.iboot);
+        return;
+    }
+    if (!e.read || !e.running || !(e.protect_dcp & T6050_DART_PROTECT_LOCK) ||
+        !(e.protect_disp & T6050_DART_PROTECT_LOCK) || !e.sid[0].ok || !e.sid[1].ok ||
+        !e.sid[2].ok) {
+        t6050_dcp_log("not running on locked four-level ADT tables: no handoff\n");
+        return;
+    }
+
+    /* Everything is found and checked before the DT is changed. */
+    int dcp = fdt_node_offset_by_compatible(dt, -1, "apple,t6050-dcp");
+    int disp = fdt_node_offset_by_compatible(dt, -1, "apple,display-subsystem");
+    if (dcp < 0 || disp < 0 || dt_get_address(dt, dcp) != e.coproc) {
+        t6050_dcp_log("no DT apple,t6050-dcp at 0x%lx or display subsystem: no handoff\n",
+                      e.coproc);
+        return;
+    }
+    int pio = fdt_subnode_offset(dt, dcp, "piodma");
+    int dart_dcp = t6050_fdt_ref(dcp, "iommus");
+    int dart_disp = t6050_fdt_ref(disp, "iommus");
+    int mbox = t6050_fdt_ref(dcp, "mboxes");
+    if (pio < 0 || dart_dcp < 0 || dart_disp < 0 || mbox < 0 ||
+        t6050_fdt_ref(pio, "iommus") != dart_disp || dt_get_address(dt, dart_dcp) != e.dart_dcp ||
+        dt_get_address(dt, dart_disp) != e.dart_disp) {
+        t6050_dcp_log("DT DARTs, mailbox or piodma not the ADT's: no handoff\n");
+        return;
+    }
+    int vp[8];
+    u64 vram, vram_size;
+    if (adt_path_offset_trace(adt, "/vram", vp) < 0 ||
+        adt_get_reg(adt, vp, "reg", 0, &vram, &vram_size) < 0 || !vram_size ||
+        vram < cur_boot_args.phys_base + cur_boot_args.mem_size) {
+        t6050_dcp_log("no ADT /vram above OS RAM: no handoff\n");
+        return;
+    }
+    const struct fw_version_info *compat =
+        os_firmware.version == V27_3B1 ? &compat_27_3 : &os_firmware;
+    if (t6050_chosen_is("asahi,t6050-dcp-compat", "27.0.0")) {
+        t6050_dcp_log("OVERRIDE: firmware-compat 27.0.0\n");
+        compat = &compat_27_0;
+    }
+    struct t6050_disp_nodes ph = {
+        .dcp = fdt_get_phandle(dt, dcp),
+        .disp = fdt_get_phandle(dt, disp),
+        .dart_dcp = fdt_get_phandle(dt, dart_dcp),
+        .dart_disp = fdt_get_phandle(dt, dart_disp),
+        .mbox = fdt_get_phandle(dt, mbox),
+    };
+    if (!ph.dcp || !ph.disp || !ph.dart_dcp || !ph.dart_disp || !ph.mbox) {
+        t6050_dcp_log("a display node has no phandle: no handoff\n");
+        return;
+    }
+
+    void *saved = t6050_dt_save();
+    if (!saved || !t6050_dt_done(saved, !t6050_disp_publish(&ph, vram, vram_size, compat))) {
+        t6050_dcp_log("DT edit failed: no handoff\n");
+        return;
+    }
+    t6050_dcp_log("handed off: framebuffer 0x%lx+0x%lx, firmware %s, compat %d.%d.%d, nodes "
+                  "enabled\n",
+                  vram, vram_size, os_firmware.string, compat->num[0], compat->num[1],
+                  compat->num[2]);
+}
+
 static int dt_set_display(void)
 {
     if (chip_id == T8140)
         return dt_set_display_t8140();
+
+    /*
+     * T6050: read dart-disp0's PROTECT as iBoot left it before the lock below can set it, and
+     * never go through dt_carveout_reserved_regions(): it initialises, walks and shuts down the
+     * display DARTs the running DCP depends on.
+     */
+    if (chip_id == T6050) {
+        dt_reserve_t6050_oslogs();
+        dt_set_display_t6050();
+        dart_lock_adt("/arm-io/dart-disp0", 0);
+        return 0;
+    }
 
     /* lock dart-disp0 to prevent old software from resetting it */
     dart_lock_adt("/arm-io/dart-disp0", 0);
@@ -6280,6 +6699,64 @@ void kboot_set_initrd(void *start, size_t size)
     initrd_size = size;
 }
 
+/* Writes a u32 array straight into the prepared tree's /chosen (after kboot_prepare_dt). */
+int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n)
+{
+    if (!dt)
+        return -1;
+    /*
+     * The prepared tree is packed; reopen it over its whole buffer from a
+     * copy (reopening in place needs twice the packed size).
+     */
+    void *packed = malloc(fdt_totalsize(dt));
+    if (!packed)
+        return -1;
+    memcpy(packed, dt, fdt_totalsize(dt));
+    int ret = fdt_open_into(packed, dt, dt_bufsize);
+    free(packed);
+    if (ret < 0)
+        return -1;
+    int node = fdt_path_offset(dt, "/chosen");
+    if (node < 0)
+        return -1;
+    if (fdt_setprop(dt, node, name, NULL, 0) < 0)
+        return -1;
+    for (int i = 0; i < n; i++)
+        if (fdt_appendprop_u32(dt, node, name, vals[i]) < 0)
+            return -1;
+    return fdt_pack(dt);
+}
+
+/*
+ * The last steps before the jump (the T6050 USB host flip) can still grow the
+ * heap after kboot_prepare_dt() reserved it; reserve what they added.
+ */
+int kboot_retain_late_heap(void)
+{
+    if (!dt || !retained_heap_end || !next_stage.entry || next_stage.args[0] != (u64)dt)
+        return 0;
+    void *packed = malloc(fdt_totalsize(dt));
+    if (!packed)
+        return -1;
+    memcpy(packed, dt, fdt_totalsize(dt));
+    /* Read after the copy's own allocation, which can grow the heap too. */
+    u64 heap_end = ALIGN_UP(heapblock_high_water(), SZ_16K);
+    int ret = 0;
+    if (heap_end > retained_heap_end) {
+        ret = fdt_open_into(packed, dt, dt_bufsize);
+        if (!ret)
+            ret = fdt_add_mem_rsv(dt, retained_heap_end, heap_end - retained_heap_end);
+        if (!ret)
+            ret = fdt_pack(dt);
+        if (!ret) {
+            printf("FDT: late heap [0x%lx, 0x%lx) retained\n", retained_heap_end, heap_end);
+            retained_heap_end = heap_end;
+        }
+    }
+    free(packed);
+    return ret;
+}
+
 int kboot_set_chosen(const char *name, const char *value)
 {
     int i = 0;
@@ -6469,6 +6946,7 @@ int kboot_prepare_dt(void *fdt)
         next_stage.entry = NULL;
         bail("FDT: refusing preparation while secondary callbacks are pending\n");
     }
+    retained_heap_end = 0;
     if (dt) {
         free(dt);
         dt = NULL;
@@ -6523,7 +7001,9 @@ int kboot_prepare_dt(void *fdt)
             image_end < (u64)_base || image_end > ram_end)
             bail("FDT: invalid T8103 inherited memory extent\n");
     }
-    if (chip_id == T8140) {
+    /* T6050 hands its live NVMe session to Linux the same way: retain the heap it allocated from.
+     */
+    if (chip_id == T8140 || chip_id == T6050) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();
 
@@ -6545,6 +7025,9 @@ int kboot_prepare_dt(void *fdt)
             if (heap_end > ram_end || fdt_add_mem_rsv(dt, heap_start, heap_end - heap_start))
                 bail("FDT: couldn't reserve retained heap\n");
             printf("FDT: retained heap [0x%lx, 0x%lx)\n", heap_start, heap_end);
+            retained_heap_end = heap_end;
+        } else {
+            retained_heap_end = image_end;
         }
     }
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
@@ -6556,6 +7039,13 @@ int kboot_prepare_dt(void *fdt)
     // the old base is the staged copy, already inside the extent above.
     if (relocated_from && fdt_add_mem_rsv(dt, relocated_from, SZ_16K))
         bail("FDT: couldn't add reservation for m1n1's old reset vector\n");
+
+    // T6050: stage 1 placed this image away from the base the secondaries' RVBAR
+    // is locked to, and smp.c forwards them from the retired vectors there.
+    u64 rvbar_relay = smp_rvbar_relay();
+    if (chip_id == T6050 && rvbar_relay &&
+        fdt_add_mem_rsv(dt, ALIGN_DOWN(rvbar_relay, SZ_16K), SZ_16K))
+        bail("FDT: couldn't add reservation for the RVBAR relay\n");
 
     if (chip_id == T8140) {
         u64 ro_start, ro_end;
@@ -6614,6 +7104,8 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_bluetooth())
         return -1;
+    if (kboot_setup_n1(dt))
+        return -1;
     if (dt_set_uboot())
         return -1;
     if (kboot_setup_atc(dt))
@@ -6643,7 +7135,7 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_disable_missing_devs("acio", "cio@", 8, 2))
         return -1;
-    if (dt_disable_missing_devs("i2c", "i2c@", 8, 0))
+    if (dt_disable_missing_devs("i2c", "i2c@", 16, 0)) /* T6050 (J714c) has nine i2c nodes */
         return -1;
     if (dt_disable_missing_j700_touch_id())
         return -1;
@@ -6761,7 +7253,16 @@ int kboot_boot(void *kernel)
         if (dt_remain < SZ_16K)
             printf("FDT: free dt buffer space low, %u bytes left\n", dt_remain);
     }
-    ret = chip_id == T8142 ? dapf_init_fdt(dt) : dapf_init_all();
+    if (chip_id == T8142) {
+        ret = dapf_init_fdt(dt);
+    } else if (chip_id == T6050) {
+        /* Only the MTP filter, reg 1 of dart-mtp; the AOP entry of the table points at the block
+         * shared by every DART and faults. */
+        ret = dapf_init("/arm-io/dart-mtp", 1);
+        printf("kboot: MTP DAPF %s on T6050\n", ret < 0 ? "failed" : "programmed");
+    } else {
+        ret = dapf_init_all();
+    }
     if (ret < 0 && chip_id == T8140) {
         printf("kboot: refusing T8140 handoff after DAPF failure\n");
         pcie_shutdown();

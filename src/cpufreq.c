@@ -71,6 +71,7 @@ static u32 pstate_reg_to_pstate(u64 val)
         case T8122:
         case T8142:
         case T8140:
+        case T6050:
             return FIELD_GET(CLUSTER_PSTATE_DESIRED1, val);
         default:
             printf("cpufreq: Chip 0x%x is unsupported\n", chip_id);
@@ -80,8 +81,9 @@ static u32 pstate_reg_to_pstate(u64 val)
 
 static int set_pstate(const struct cluster_t *cluster, uint32_t pstate)
 {
-    if (chip_id == T8142 && poll64(cluster->base + CLUSTER_PSTATE, CLUSTER_PSTATE_BUSY, 0,
-                                   CLUSTER_SWITCH_TIMEOUT) < 0) {
+    if ((chip_id == T8142 || chip_id == T6050) &&
+        poll64(cluster->base + CLUSTER_PSTATE, CLUSTER_PSTATE_BUSY, 0, CLUSTER_SWITCH_TIMEOUT) <
+            0) {
         printf("cpufreq: Cluster %s is busy before P-State request\n", cluster->name);
         return -1;
     }
@@ -118,6 +120,7 @@ static int set_pstate(const struct cluster_t *cluster, uint32_t pstate)
             case T8122:
             case T8142:
             case T8140:
+            case T6050:
                 val &= ~CLUSTER_PSTATE_DESIRED1;
                 val |= CLUSTER_PSTATE_SET | FIELD_PREP(CLUSTER_PSTATE_DESIRED1, pstate);
                 break;
@@ -133,7 +136,7 @@ static int set_pstate(const struct cluster_t *cluster, uint32_t pstate)
         }
     }
 
-    if (chip_id == T8142 &&
+    if ((chip_id == T8142 || chip_id == T6050) &&
         pstate_reg_to_pstate(read64(cluster->base + CLUSTER_PSTATE)) != pstate) {
         printf("cpufreq: Cluster %s did not accept P-State %u\n", cluster->name, pstate);
         return -1;
@@ -179,6 +182,7 @@ int cpufreq_init_cluster(const struct cluster_t *cluster, const struct feat_t *f
         case S8000 ... S8003:
         case T8010 ... T8015: /* This covers a gap but T8013 and T8014 will not randomly appear. */
         case T8142:           /* Keep firmware voltage, PLL and throttling configuration. */
+        case T6050:
             /* Do nothing */
             break;
         case T8103:
@@ -378,6 +382,16 @@ static const struct cluster_t t8142_clusters[] = {
     {},
 };
 
+/*
+ * T6050 (M5 Pro/Max): two M clusters (ADT voltage-states22/23, 15 P-states,
+ * 1.344 to 4.38 GHz) and one P cluster (voltage-states5, 20 P-states). Only
+ * cluster 0 runs cores today (CPU-START.md); the others stay untouched.
+ */
+static const struct cluster_t t6050_clusters[] = {
+    {"MCPU0", 0x210e00000, false, 1, 4},
+    {},
+};
+
 const struct cluster_t *cpufreq_get_clusters(void)
 {
     switch (chip_id) {
@@ -417,6 +431,8 @@ const struct cluster_t *cpufreq_get_clusters(void)
             return t6030_clusters;
         case T8142:
             return t8142_clusters;
+        case T6050:
+            return t6050_clusters;
         case T6031:
         case T6034:
             return t6031_clusters;
@@ -535,6 +551,7 @@ const struct feat_t *cpufreq_get_features(void)
         case T8122:
             return t8122_features;
         case T8142:
+        case T6050:
             return t8142_features;
         case T6020:
         case T6021:

@@ -215,6 +215,10 @@ const struct fw_version_info fw_versions[NUM_FW_VERSIONS] = {
     // Same iBoot string as 27.0: detect_firmware() always picks V27_0. Verified from the J575D
     // (M3 Ultra) 27.0.1 iBoot (26A434): both report "mBoot-20457.1.29", so no V27_0_1 exists.
     [V27_0]      = {V27_0,      "27.0",        {27, 0, 0},     3, "mBoot-20457.1.29"},
+    // Aura (aurora-silicon/aura PR #61): the 27.2 stub's iBoot string.
+    [V27_2]      = {V27_2,      "27.2",        {27, 2, 0},     3, "mBoot-20457.41.3"},
+    // J716s stub 26C5035r (27.3 beta 1); its DCP firmware is AppleDCP-1317.60.10, SDK 27.3.
+    [V27_3B1]    = {V27_3B1,    "27.3 beta",   {27, 2, 98, 1}, 4, "mBoot-20457.60.65.0.1"},
     // clang-format on
 };
 

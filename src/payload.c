@@ -403,7 +403,11 @@ int payload_run(void)
 
 #ifndef ESP_STAGE2
     if (!stage1_config_applied) {
-        const char *target = stage1_config_target();
+        /*
+         * With boot= or an appended kernel (U-Boot) the embedded config only sets the proxy
+         * window: no chainload target.
+         */
+        const char *target = (boot_spec || kernel) ? NULL : stage1_config_target();
         if (target) {
             if (chainload_spec && strcmp(chainload_spec, target)) {
                 printf("Payload: embedded and appended chainload targets differ\n");
@@ -508,6 +512,14 @@ int payload_run(void)
 
         if (config_lost)
             kboot_set_config_lost();
+
+#ifdef ESP_STAGE2
+        /* T6050: stage 1 left the ANS session live; the next stage (U-Boot) adopts it. */
+        if (chip_id == T6050 && nvme_adopt_live_session && !boot_spec &&
+            kboot_set_chosen("asahi,nvme-adopt", "live-rtkit-v1") < 0)
+            printf("Failed to kboot set asahi,nvme-adopt\n");
+#endif
+
         if (kboot_prepare_dt(fdt)) {
             printf("Failed to prepare FDT!\n");
             goto boot_failed;

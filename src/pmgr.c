@@ -655,20 +655,30 @@ int pmgr_power_on(int die, const char *name)
     return pmgr_set_mode(addr, PMGR_PS_ACTIVE);
 }
 
-int pmgr_power_is_on(int die, const char *name)
+/*
+ * The PS register of the non-virtual device `name`, or 0. A name can also belong to a virtual
+ * device without a PS register of its own (T6050 has a no_ps APCIE_PHY_SW beside the real one).
+ */
+uintptr_t pmgr_psreg_by_name(int die, const char *name)
 {
     if (die < 0 || die >= pmgr_dies)
-        return -1;
+        return 0;
     for (size_t i = 0; i < pmgr_devices_len; i++) {
         const struct pmgr_device *dev = &pmgr_devices[i];
-        if (strncmp(dev->name, name, sizeof(dev->name)))
-            continue;
-        uintptr_t addr = pmgr_device_get_addr(die, dev);
-        if (!addr)
-            return -1;
-        return FIELD_GET(PMGR_PS_ACTUAL, read32(addr)) == PMGR_PS_ACTIVE;
+        if (!(dev->flags & PMGR_FLAG_VIRTUAL) && !strncmp(dev->name, name, sizeof(dev->name)))
+            return pmgr_device_get_addr(die, dev);
     }
-    return -1;
+    return 0;
+}
+
+/* 1 if active, 0 if not, -1 without such a non-virtual device */
+int pmgr_power_is_on(int die, const char *name)
+{
+    uintptr_t addr = pmgr_psreg_by_name(die, name);
+
+    if (!addr)
+        return -1;
+    return FIELD_GET(PMGR_PS_ACTUAL, read32(addr)) == PMGR_PS_ACTIVE;
 }
 
 int pmgr_adt_path_offset_trace(const void *adt_ptr, int *path)
