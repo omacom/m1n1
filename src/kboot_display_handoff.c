@@ -60,7 +60,7 @@
  * nodes stay "disabled": only a kernel that sees apple,t8122-handoff may enable them, and a T8122
  * kernel device tree without display nodes is normal. No T8122 PMP is handed off here.
  *
- * T6031 (M3 Max, J514C/J516C only; nothing at all on another board or chip, so not on a T6034):
+ * T6031 (M3 Max, J514C/J516C only; its profile never applies to T6034):
  * the T8122 handoff with T6031 values, armed by chosen.asahi,t6031-dcp=1, as on T6030 and T8122.
  * dt_set_m3_defaults() (kboot.c) sets it on J514C and J516C unless a config line set it.
  * The kernel decides whether to take the display over (a kernel
@@ -363,8 +363,67 @@ static const struct dcp_soc dcp_soc_t6031 = {
     .pmgr_disp_cpu = 0x2922802a0UL,
 };
 
-static const struct dcp_soc *const dcp_socs[] = {&dcp_soc_t6030, &dcp_soc_t8122, &dcp_soc_t6031};
+/* J514M/T6034: fresh ADT registers and image UUID match this checked layout. */
+static const char *const dcp_boards_t6034[] = {"apple,j514m", NULL};
 
+static const struct dcp_soc dcp_soc_t6034 = {
+    .name = "T6034",
+    .chip = T6034,
+    .compat = "apple,t6034",
+    .boards = dcp_boards_t6034,
+    .boards_desc = "J514M",
+    .dcp_compat = "apple,t6034-dcp",
+    .disp_compat = "apple,t6034-display-subsystem",
+    .marker = "apple,t6034-handoff",
+    .optin = "asahi,t6034-dcp",
+    .oslog_always = true,
+    .adt_psreg = true,
+    .board_gate = true,
+    .uuid = "F493F03E-CC40-3D89-9A08-5F259BA2B246",
+    .log_streams = true,
+    .os_fw = V14_7,
+    .os_fw_name = "14.7",
+    .coproc = 0x386c00000UL,
+    .dart_dcp = 0x38530c000UL,
+    .dart_disp = 0x385304000UL,
+    .vm_base = DCP6_DART_VM_BASE,
+    .vm_size = DCP6_DART_VM_SIZE,
+    .pmgr_disp_cpu = 0x2922802a0UL,
+};
+
+/* J516M retains its tested T6031 display handoff and explicit opt-in. */
+static const char *const dcp_boards_j516m[] = {"apple,j516m", NULL};
+
+static const struct dcp_soc dcp_soc_j516m = {
+    .name = "T6034",
+    .chip = T6034,
+    .compat = "apple,t6034",
+    .boards = dcp_boards_j516m,
+    .boards_desc = "J516M",
+    .dcp_compat = "apple,t6031-dcp",
+    .disp_compat = "apple,t6031-display-subsystem",
+    .marker = "apple,t6031-handoff",
+    .optin = "asahi,t6034-dcp",
+    .oslog_always = true,
+    .adt_psreg = true,
+    .board_gate = true,
+    .uuid = "F493F03E-CC40-3D89-9A08-5F259BA2B246",
+    .log_streams = true,
+    .os_fw = V14_7,
+    .os_fw_name = "14.7",
+    .coproc = 0x386c00000UL,
+    .dart_dcp = 0x38530c000UL,
+    .dart_disp = 0x385304000UL,
+    .vm_base = DCP6_DART_VM_BASE,
+    .vm_size = DCP6_DART_VM_SIZE,
+    .pmgr_disp_cpu = 0x2922802a0UL,
+};
+
+static const struct dcp_soc *const dcp_socs[] = {
+    &dcp_soc_t6030, &dcp_soc_t8122, &dcp_soc_t6031, &dcp_soc_t6034};
+
+/* T6034 has its own exact J514M/profile/firmware checks above. It reuses only
+ * the measured register layout and the generic bounded handoff transaction. */
 struct dcp6_seg {
     u64 phys;
     u64 size; /* rounded up to 16K */
@@ -2736,6 +2795,11 @@ static void dcpext6_handoffs(void *dt)
 int dt_set_display_handoff(void *dt)
 {
     memset(&dcp6, 0, sizeof(dcp6));
+
+    /* Both Max variants share a SoC compatible; select the exact J516M first. */
+    if (chip_id == T6034 && !fdt_node_check_compatible(dt, 0, "apple,t6034") &&
+        !fdt_node_check_compatible(dt, 0, "apple,j516m"))
+        dcp6.soc = &dcp_soc_j516m;
 
     for (size_t i = 0; i < ARRAY_SIZE(dcp_socs) && !dcp6.soc; i++)
         if (!fdt_node_check_compatible(dt, 0, dcp_socs[i]->compat))
