@@ -3088,13 +3088,26 @@ static int dt_set_gpu_t8122(void *dt)
     return 0;
 }
 
-static int dt_set_gpu_t8140(void *dt)
+/* G17 GPUs: the ADT perf-state shape and the compatibles the loader accepts. */
+struct g17_gpu {
+    const char *name;
+    const char *compatible;
+    const char *adt_compatible;
+    u32 count;      /* perf-state-count, and the DT OPP entries */
+    u32 num_states; /* gpu-num-perf-states */
+    u32 tables;     /* perf-state-table-count; the OPPs come from the first table */
+};
+
+static const struct g17_gpu g17_t8140 = {"T8140", "apple,agx-t8140", "gpu,t8140", 16, 15, 1};
+static const struct g17_gpu g17_t6050 = {"T6050", "apple,agx-t6050", "gpu,t6050", 14, 13, 4};
+
+static int dt_set_gpu_g17(void *dt, const struct g17_gpu *g)
 {
     int gpu = fdt_path_offset(dt, "gpu");
     if (gpu < 0)
         return 0;
-    if (fdt_node_check_compatible(dt, gpu, "apple,agx-t8140") &&
-        fdt_node_check_compatible(dt, gpu, "gpu,t8140"))
+    if (fdt_node_check_compatible(dt, gpu, g->compatible) &&
+        fdt_node_check_compatible(dt, gpu, g->adt_compatible))
         return 0;
 
     int sgx = adt_path_offset(adt, "/arm-io/sgx");
@@ -3102,14 +3115,14 @@ static int dt_set_gpu_t8140(void *dt)
     const struct perf_state *states, *sram;
     if (sgx < 0 || ADT_GETPROP(adt, sgx, "perf-state-count", &count) != sizeof(count) ||
         ADT_GETPROP(adt, sgx, "gpu-num-perf-states", &num_states) != sizeof(num_states) ||
-        ADT_GETPROP(adt, sgx, "perf-state-table-count", &tables) != sizeof(tables) || count != 16 ||
-        num_states != 15 || tables != 1)
+        ADT_GETPROP(adt, sgx, "perf-state-table-count", &tables) != sizeof(tables) ||
+        count != g->count || num_states != g->num_states || tables != g->tables)
         goto disable;
     states = adt_getprop(adt, sgx, "perf-states", &len);
-    if (!states || len != count * sizeof(*states))
+    if (!states || len != tables * count * sizeof(*states))
         goto disable;
     sram = adt_getprop(adt, sgx, "perf-states-sram", &len);
-    if (!sram || len != count * sizeof(*sram))
+    if (!sram || len != tables * count * sizeof(*sram))
         goto disable;
     for (u32 i = 0; i < count; i++)
         if (states[i].volt > UINT32_MAX / 1000)
@@ -3122,14 +3135,16 @@ static int dt_set_gpu_t8140(void *dt)
     int table = fdt_node_offset_by_phandle(dt, fdt32_ld(opp_ph));
     if (table < 0)
         goto disable;
-    int opp, opp_count = 0;
+    int opp;
+    u32 opp_count = 0;
     fdt_for_each_subnode(opp, dt, table)
     {
-        if (++opp_count > 16 || !fdt_getprop(dt, opp, "opp-hz", &ph_len) || ph_len != sizeof(u64) ||
-            !fdt_getprop(dt, opp, "opp-microvolt", &ph_len) || ph_len != sizeof(u32))
+        if (++opp_count > g->count || !fdt_getprop(dt, opp, "opp-hz", &ph_len) ||
+            ph_len != sizeof(u64) || !fdt_getprop(dt, opp, "opp-microvolt", &ph_len) ||
+            ph_len != sizeof(u32))
             goto disable;
     }
-    if (opp_count != 16)
+    if (opp_count != g->count)
         goto disable;
 
     static const struct {
@@ -3174,14 +3189,16 @@ disable:
     gpu = fdt_path_offset(dt, "gpu");
     if (gpu >= 0 && fdt_setprop_string(dt, gpu, "status", "disabled"))
         return -1;
-    printf("FDT: GPU: invalid T8140 ADT or DT data, disabling GPU\n");
+    printf("FDT: GPU: invalid %s ADT or DT data, disabling GPU\n", g->name);
     return 0;
 }
 
 int dt_set_gpu(void *dt)
 {
     if (chip_id == T8140)
-        return dt_set_gpu_t8140(dt);
+        return dt_set_gpu_g17(dt, &g17_t8140);
+    if (chip_id == T6050)
+        return dt_set_gpu_g17(dt, &g17_t6050);
 
     bool has_cs_afr = false;
     int (*calc_power)(u32 count, u32 table_count, const struct perf_state *core,

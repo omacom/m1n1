@@ -274,8 +274,9 @@ void smp_secondary_prep_el3(void)
 
 static u32 cpu_start_bit(int index, const struct cpu_info *cpu)
 {
-    /* T8142 has six E cores followed by four P cores, not four-core banks. */
-    if (chip_id == T8142)
+    /* T8142 has six E cores followed by four P cores, not four-core banks.
+     * T6050 (J714c) measures the same: one bit per CPU index, write-1-to-clear. */
+    if (chip_id == T8142 || chip_id == T6050)
         return BIT(index);
 
     return BIT(4 * cpu->cluster + cpu->core);
