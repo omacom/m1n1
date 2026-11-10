@@ -121,6 +121,8 @@ static u64 FOOTPRINT = 0x410000UL;
 #define STUB_SIZE     64
 
 static struct boot_args cur_boot_args;
+static struct boot_args *staged_boot_args; /* chainload.c's retained-heap state (#30) */
+static u64 staged_args0, staged_heap_end;
 static int chip_id, ro_status, adt_node = 1, setprop_ret;
 static u64 ram, home, ro_start, ro_end, live_heap, heap_next, sepfw[2];
 static u64 force_alloc, alloc_fail, allocs, frees, last_alloc;

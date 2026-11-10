@@ -150,6 +150,84 @@ static u64 old_vectors_start(void)
     return relocated_from ? relocated_from + ((u64)_vectors_start - (u64)_base) : 0;
 }
 
+/* Write a relay at a locked reset vector and publish it to cores that reset with caches off. */
+static int smp_write_relay(u64 locked, const u32 *code, size_t words)
+{
+    u64 page = ALIGN_DOWN(locked, get_page_size());
+    if (mmu_active())
+        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RW);
+    for (size_t i = 0; i < words; i++)
+        write32(locked + 4 * i, code[i]);
+    dc_cvac_range((void *)locked, 4 * words);
+    sysop("dsb sy");
+    ic_ivau_range((void *)locked, 4 * words);
+    sysop("dsb sy");
+    sysop("isb");
+    if (mmu_active())
+        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RX);
+
+    for (size_t i = 0; i < words; i++) {
+        if (read32(locked + 4 * i) != code[i]) {
+            printf("SMP: RVBAR relay read-back failed at 0x%lx\n", locked);
+            return -1;
+        }
+    }
+    installed_relay = locked;
+    return 0;
+}
+
+/*
+ * T6050: iBoot locks every secondary's RVBAR to the base of the image it
+ * loaded. A stage 1 that placed this image elsewhere (a stage 2 with a kernel
+ * appended does not fit below the secondary-only CTRR window, so it goes above
+ * it) leaves those cores resetting into the retired stage 1's vectors.
+ * Forward them with the stub start.S writes at a moved M3 image's old base:
+ * "ldr x16, 1f; br x16; 1: .quad _vectors_start", since the distance can be
+ * out of reach of a branch. Only a retired m1n1 vector table (same four slot
+ * tags as ours) in RAM below this image and outside the CTRR window is
+ * rewritten, once; kboot keeps its page from the OS.
+ */
+static int smp_prepare_rvbar_t6050(u64 locked, u64 target)
+{
+    const u32 relay[4] = {0x58000050, 0xd61f0200, (u32)target, (u32)(target >> 32)};
+    u64 page = ALIGN_DOWN(locked, SZ_16K);
+
+    if (installed_relay) {
+        if (installed_relay == locked && !memcmp((void *)locked, relay, sizeof(relay)))
+            return 0;
+        printf("SMP: RVBAR 0x%lx differs from the relay at 0x%lx; refusing start\n", locked,
+               installed_relay);
+        return -1;
+    }
+    if (!in_el2()) {
+        printf("SMP: RVBAR 0x%lx differs from vector 0x%lx; refusing start\n", locked, target);
+        return -1;
+    }
+
+    u64 ro_start = mrs(SYS_IMP_APL_CTRR_C_LWR_EL1);
+    u64 ro_end = ALIGN_UP(mrs(SYS_IMP_APL_CTRR_C_UPR_EL1), SZ_4K);
+    if (page < cur_boot_args.phys_base || page + SZ_16K > (u64)_base ||
+        (page < ro_end && page + SZ_16K > ro_start)) {
+        printf("SMP: RVBAR 0x%lx is not RAM below this image; refusing start\n", locked);
+        return -1;
+    }
+    for (u64 off = 0; off <= 0x180; off += 0x80) {
+        if (read32(locked + off) != read32((u64)_vectors_start + off)) {
+            printf("SMP: RVBAR 0x%lx is not a retired m1n1 vector table\n", locked);
+            return -1;
+        }
+    }
+    if (smp_write_relay(locked, relay, ARRAY_SIZE(relay)))
+        return -1;
+    printf("SMP: installed RVBAR relay at 0x%lx -> 0x%lx\n", locked, target);
+    return 0;
+}
+
+u64 smp_rvbar_relay(void)
+{
+    return installed_relay;
+}
+
 static int smp_prepare_rvbar(const struct cpu_info *cpu)
 {
     u64 rvbar = read64(cpu->impl_reg);
@@ -161,6 +239,8 @@ static int smp_prepare_rvbar(const struct cpu_info *cpu)
     /* A stage that moved above the chainloaded image keeps entry at its old base. */
     if (relocated_from && locked == old_vectors_start())
         return 0;
+    if (chip_id == T6050 && (rvbar & RVBAR_LOCK))
+        return smp_prepare_rvbar_t6050(locked, target);
     if (chip_id != T8140 || !(rvbar & RVBAR_LOCK)) {
         printf("SMP: RVBAR 0x%lx differs from vector 0x%lx; refusing start\n", locked, target);
         return -1;
@@ -177,23 +257,8 @@ static int smp_prepare_rvbar(const struct cpu_info *cpu)
         printf("SMP: RVBAR 0x%lx is not a verified retired image vector\n", locked);
         return -1;
     }
-    u64 page = ALIGN_DOWN(locked, get_page_size());
-    if (mmu_active())
-        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RW);
-    write32(locked, branch);
-    dc_cvac_range((void *)locked, sizeof(branch));
-    sysop("dsb sy");
-    ic_ivau_range((void *)locked, sizeof(branch));
-    sysop("dsb sy");
-    sysop("isb");
-    if (mmu_active())
-        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RX);
-
-    if (read32(locked) != branch) {
-        printf("SMP: RVBAR relay read-back failed at 0x%lx\n", locked);
+    if (smp_write_relay(locked, &branch, 1))
         return -1;
-    }
-    installed_relay = locked;
     printf("SMP: installed RVBAR relay at 0x%lx -> 0x%lx (0x%x)\n", locked, target, branch);
     return 0;
 }
@@ -274,8 +339,9 @@ void smp_secondary_prep_el3(void)
 
 static u32 cpu_start_bit(int index, const struct cpu_info *cpu)
 {
-    /* T8142 has six E cores followed by four P cores, not four-core banks. */
-    if (chip_id == T8142)
+    /* T8142 has six E cores followed by four P cores, not four-core banks.
+     * T6050 (J714c) measures the same: one bit per CPU index, write-1-to-clear. */
+    if (chip_id == T8142 || chip_id == T6050)
         return BIT(index);
 
     return BIT(4 * cpu->cluster + cpu->core);
