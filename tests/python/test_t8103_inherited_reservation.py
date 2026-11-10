@@ -18,7 +18,9 @@ SOURCE = Path(os.environ.get("DART_DISPLAY_SOURCE", Path(__file__).resolve().par
 def test_inherited_reservation(tmp_path):
     text = (SOURCE / "src/kboot.c").read_text()
     start = text.index("    u64 image_end = (u64)_end;", text.index("int kboot_prepare_dt("))
-    end = text.index("    if (chip_id == T8140)", start)
+    # The heap block that follows (T8140, and T6050 since it keeps its NVMe session for Linux)
+    end = re.compile(r"(    /\*[^\n]*\*/\n)?    if \(chip_id == T8140( \|\| chip_id == T6050)?\)").search(
+        text, start).start()
     block = text[start:end]
     call = re.search(
         r"    if \(fdt_add_mem_rsv\(dt, \(u64\)_base, image_end - \(u64\)_base\)\)\n"

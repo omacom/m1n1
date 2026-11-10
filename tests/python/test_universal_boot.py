@@ -21,6 +21,8 @@ def test_embedded_target_applies_across_chip_generations(tmp_path):
 static unsigned chip_id;
 static bool stage1_config_applied;
 static char *chainload_spec;
+static char *boot_spec;
+static void *kernel;
 static const char *configured;
 static char stage1_esp_chosen[128];
 static char *chosen[MAX_CHOSEN_VARS];
@@ -32,7 +34,7 @@ static int apply(void) {
 return 0;
 }
 int main(void) {
- unsigned chips[]={0x8103,0x6000,0x6001,0x6002,0x8112,0x6020,0x6021,0x6022,0x8122,0x6030,0x6031,0x6034,0x8140};
+ unsigned chips[]={0x8103,0x6000,0x6001,0x6002,0x8112,0x6020,0x6021,0x6022,0x8122,0x6030,0x6031,0x6034,0x8140,0x6050};
  for (unsigned i=0;i<sizeof(chips)/sizeof(*chips);i++) {
   chip_id=chips[i];stage1_config_applied=false;chainload_spec=NULL;chosen_cnt=0;
   configured="12345678-abcd-1234-abcd-1234567890ab;m1n1/boot.bin";
@@ -42,6 +44,16 @@ int main(void) {
   stage1_config_applied=false;chainload_spec="different;boot.bin";
   assert(apply()==-1 && chosen_cnt==1);
  }
+ /* boot= or an appended next stage: the config gives only the proxy window, no target or hint */
+ configured="12345678-abcd-1234-abcd-1234567890ab;m1n1/boot.bin";chip_id=0x6050;
+ boot_spec="nvme0n1p6/vmlinuz";kernel=NULL;chainload_spec=NULL;stage1_config_applied=false;chosen_cnt=0;
+ assert(apply()==0 && !chainload_spec && !chosen_cnt && stage1_config_applied);
+ boot_spec=NULL;kernel=(void *)1;chainload_spec=NULL;stage1_config_applied=false;chosen_cnt=0;
+ assert(apply()==0 && !chainload_spec && !chosen_cnt && stage1_config_applied);
+ /* nothing to compare a chainload= with, so it is neither refused nor replaced */
+ chainload_spec="different;boot.bin";stage1_config_applied=false;
+ assert(apply()==0 && !strcmp(chainload_spec,"different;boot.bin") && !chosen_cnt);
+ kernel=NULL;
  configured=NULL;chainload_spec=NULL;stage1_config_applied=false;chosen_cnt=0;
  assert(apply()==0 && !chainload_spec && !chosen_cnt);
  return 0;
