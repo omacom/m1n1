@@ -22,12 +22,15 @@ struct kernel_header {
 
 void kboot_set_initrd(void *start, size_t size);
 int kboot_set_chosen(const char *name, const char *value);
+int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n);
+int kboot_retain_late_heap(void);
 void kboot_delete_chosen(const char *name);
 void kboot_set_config_lost(void);
 int kboot_set_uboot(const char *name, const char *value);
 int dt_gpu_t8122_26_calibrate(void *dt);
 int dt_set_gpu_t8122_26(void *dt);
 int kboot_prepare_dt(void *fdt);
+const char *kboot_get_chosen(const char *name);
 int kboot_boot(void *kernel);
 
 /* Boot-args RAM range and boot framebuffer base, for the kboot_* SoC helpers */

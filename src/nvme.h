@@ -9,6 +9,7 @@ bool nvme_init(void);
 extern bool nvme_adopt_live_session;
 extern bool nvme_keep_running_for_linux;
 bool nvme_shutdown(void);
+bool nvme_stop(void);
 bool nvme_has_live_post_m4_session(void);
 
 bool nvme_flush(u32 nsid);
