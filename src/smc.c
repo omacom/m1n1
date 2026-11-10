@@ -57,13 +57,20 @@ static void smc_handle_msg(smc_dev_t *smc, u64 msg)
     }
 }
 
-static int smc_work(smc_dev_t *smc)
+/* Bounded: an SMC that never answers ends the call instead of hanging m1n1 */
+#define SMC_REPLY_TIMEOUT (2 * USEC_PER_SEC)
+
+/* deadline: one timeout_calculate() for the whole wait, so other traffic cannot extend it */
+static int smc_work(smc_dev_t *smc, u64 deadline)
 {
     int ret;
     struct rtkit_message msg;
 
     while ((ret = rtkit_recv(smc->rtkit, &msg)) == 0)
-        ;
+        if (timeout_expired(deadline)) {
+            printf("SMC: no reply\n");
+            return -1;
+        }
 
     if (ret < 0) {
         printf("SMC: rtkit_recv failed!\n");
@@ -90,7 +97,7 @@ static void smc_send(smc_dev_t *smc, u64 message)
     rtkit_send(smc->rtkit, &msg);
 }
 
-static int smc_cmd(smc_dev_t *smc, u64 message)
+static int smc_cmd_result(smc_dev_t *smc, u64 message, u64 *result_out)
 {
     u8 id = smc->msgid++ & 0xF;
     assert(!smc->outstanding[id]);
@@ -98,11 +105,23 @@ static int smc_cmd(smc_dev_t *smc, u64 message)
 
     message |= FIELD_PREP(SMC_MSG_ID, id);
 
+    u64 deadline = timeout_calculate(SMC_REPLY_TIMEOUT);
     smc_send(smc, message);
-    while (smc->outstanding[id])
-        smc_work(smc);
+    while (smc->outstanding[id]) {
+        int ret = smc_work(smc, deadline);
+        if (!ret && smc->outstanding[id] && timeout_expired(deadline)) {
+            printf("SMC: no reply\n");
+            ret = -1;
+        }
+        if (ret < 0) {
+            smc->outstanding[id] = false;
+            return -1;
+        }
+    }
 
     u64 result = smc->ret[id];
+    if (result_out)
+        *result_out = result;
     u32 ret = FIELD_GET(SMC_RESULT_RESULT, result);
     if (ret) {
         printf("SMC: smc_cmd[0x%x] failed: %u\n", id, ret);
@@ -110,6 +129,11 @@ static int smc_cmd(smc_dev_t *smc, u64 message)
     }
 
     return 0;
+}
+
+static int smc_cmd(smc_dev_t *smc, u64 message)
+{
+    return smc_cmd_result(smc, message, NULL);
 }
 
 void smc_shutdown(smc_dev_t *smc)
@@ -151,12 +175,17 @@ smc_dev_t *smc_init(void)
     u64 initialize =
         FIELD_PREP(SMC_MSG_TYPE, SMC_INITIALIZE) | FIELD_PREP(SMC_MSG_ID, smc->msgid++);
 
+    u64 deadline = timeout_calculate(SMC_REPLY_TIMEOUT);
     smc_send(smc, initialize);
 
     while (!smc->shmem) {
-        int ret = smc_work(smc);
+        int ret = smc_work(smc, deadline);
         if (ret < 0)
             goto out_rtkit;
+        if (!smc->shmem && timeout_expired(deadline)) {
+            printf("SMC: no reply\n");
+            goto out_rtkit;
+        }
     }
 
     return smc;
@@ -178,4 +207,18 @@ int smc_write_u32(smc_dev_t *smc, u32 key, u32 value)
     msg |= FIELD_PREP(SMC_WRITE_KEY_KEY, key);
 
     return smc_cmd(smc, msg);
+}
+
+/* A key of at most 4 bytes comes back in the reply itself */
+int smc_read_u32(smc_dev_t *smc, u32 key, u32 *value)
+{
+    u64 result;
+    u64 msg = FIELD_PREP(SMC_MSG_TYPE, SMC_READ_KEY);
+    msg |= FIELD_PREP(SMC_WRITE_KEY_SIZE, sizeof(*value));
+    msg |= FIELD_PREP(SMC_WRITE_KEY_KEY, key);
+
+    int ret = smc_cmd_result(smc, msg, &result);
+    if (!ret)
+        *value = FIELD_GET(SMC_RESULT_VALUE, result);
+    return ret;
 }

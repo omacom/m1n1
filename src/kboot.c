@@ -20,6 +20,7 @@
 #include "kboot_atc.h"
 #include "kboot_display_facts.h"
 #include "kboot_gpu_t8122.h"
+#include "kboot_n1.h"
 #include "kboot_pmp_t8122.h"
 #include "kboot_t6031.h"
 #include "malloc.h"
@@ -53,6 +54,8 @@
 
 static void *dt = NULL;
 static int dt_bufsize = 0;
+/* End of the retained heap reservation (T8140, T6050); 0 when the heap is not retained */
+static u64 retained_heap_end = 0;
 static void *initrd_start = NULL;
 static size_t initrd_size = 0;
 static char *chosen_params[MAX_CHOSEN_PARAMS][2];
@@ -458,6 +461,12 @@ static const char *kboot_chosen_param(const char *name)
         if (!strcmp(chosen_params[i][0], name))
             return chosen_params[i][1] ? chosen_params[i][1] : "";
     return NULL;
+}
+
+/* kboot_chosen_param() for the SoC helpers in other files (kboot_n1.c) */
+const char *kboot_get_chosen(const char *name)
+{
+    return kboot_chosen_param(name);
 }
 
 /*
@@ -6280,6 +6289,64 @@ void kboot_set_initrd(void *start, size_t size)
     initrd_size = size;
 }
 
+/* Writes a u32 array straight into the prepared tree's /chosen (after kboot_prepare_dt). */
+int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n)
+{
+    if (!dt)
+        return -1;
+    /*
+     * The prepared tree is packed; reopen it over its whole buffer from a
+     * copy (reopening in place needs twice the packed size).
+     */
+    void *packed = malloc(fdt_totalsize(dt));
+    if (!packed)
+        return -1;
+    memcpy(packed, dt, fdt_totalsize(dt));
+    int ret = fdt_open_into(packed, dt, dt_bufsize);
+    free(packed);
+    if (ret < 0)
+        return -1;
+    int node = fdt_path_offset(dt, "/chosen");
+    if (node < 0)
+        return -1;
+    if (fdt_setprop(dt, node, name, NULL, 0) < 0)
+        return -1;
+    for (int i = 0; i < n; i++)
+        if (fdt_appendprop_u32(dt, node, name, vals[i]) < 0)
+            return -1;
+    return fdt_pack(dt);
+}
+
+/*
+ * The last steps before the jump (the T6050 USB host flip) can still grow the
+ * heap after kboot_prepare_dt() reserved it; reserve what they added.
+ */
+int kboot_retain_late_heap(void)
+{
+    if (!dt || !retained_heap_end || !next_stage.entry || next_stage.args[0] != (u64)dt)
+        return 0;
+    void *packed = malloc(fdt_totalsize(dt));
+    if (!packed)
+        return -1;
+    memcpy(packed, dt, fdt_totalsize(dt));
+    /* Read after the copy's own allocation, which can grow the heap too. */
+    u64 heap_end = ALIGN_UP(heapblock_high_water(), SZ_16K);
+    int ret = 0;
+    if (heap_end > retained_heap_end) {
+        ret = fdt_open_into(packed, dt, dt_bufsize);
+        if (!ret)
+            ret = fdt_add_mem_rsv(dt, retained_heap_end, heap_end - retained_heap_end);
+        if (!ret)
+            ret = fdt_pack(dt);
+        if (!ret) {
+            printf("FDT: late heap [0x%lx, 0x%lx) retained\n", retained_heap_end, heap_end);
+            retained_heap_end = heap_end;
+        }
+    }
+    free(packed);
+    return ret;
+}
+
 int kboot_set_chosen(const char *name, const char *value)
 {
     int i = 0;
@@ -6469,6 +6536,7 @@ int kboot_prepare_dt(void *fdt)
         next_stage.entry = NULL;
         bail("FDT: refusing preparation while secondary callbacks are pending\n");
     }
+    retained_heap_end = 0;
     if (dt) {
         free(dt);
         dt = NULL;
@@ -6523,7 +6591,9 @@ int kboot_prepare_dt(void *fdt)
             image_end < (u64)_base || image_end > ram_end)
             bail("FDT: invalid T8103 inherited memory extent\n");
     }
-    if (chip_id == T8140) {
+    /* T6050 hands its live NVMe session to Linux the same way: retain the heap it allocated from.
+     */
+    if (chip_id == T8140 || chip_id == T6050) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;
         u64 high_water = heapblock_high_water();
 
@@ -6545,6 +6615,9 @@ int kboot_prepare_dt(void *fdt)
             if (heap_end > ram_end || fdt_add_mem_rsv(dt, heap_start, heap_end - heap_start))
                 bail("FDT: couldn't reserve retained heap\n");
             printf("FDT: retained heap [0x%lx, 0x%lx)\n", heap_start, heap_end);
+            retained_heap_end = heap_end;
+        } else {
+            retained_heap_end = image_end;
         }
     }
     if (fdt_add_mem_rsv(dt, (u64)_base, image_end - (u64)_base))
@@ -6556,6 +6629,13 @@ int kboot_prepare_dt(void *fdt)
     // the old base is the staged copy, already inside the extent above.
     if (relocated_from && fdt_add_mem_rsv(dt, relocated_from, SZ_16K))
         bail("FDT: couldn't add reservation for m1n1's old reset vector\n");
+
+    // T6050: stage 1 placed this image away from the base the secondaries' RVBAR
+    // is locked to, and smp.c forwards them from the retired vectors there.
+    u64 rvbar_relay = smp_rvbar_relay();
+    if (chip_id == T6050 && rvbar_relay &&
+        fdt_add_mem_rsv(dt, ALIGN_DOWN(rvbar_relay, SZ_16K), SZ_16K))
+        bail("FDT: couldn't add reservation for the RVBAR relay\n");
 
     if (chip_id == T8140) {
         u64 ro_start, ro_end;
@@ -6614,6 +6694,8 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_set_bluetooth())
         return -1;
+    if (kboot_setup_n1(dt))
+        return -1;
     if (dt_set_uboot())
         return -1;
     if (kboot_setup_atc(dt))
@@ -6643,7 +6725,7 @@ int kboot_prepare_dt(void *fdt)
         return -1;
     if (dt_disable_missing_devs("acio", "cio@", 8, 2))
         return -1;
-    if (dt_disable_missing_devs("i2c", "i2c@", 8, 0))
+    if (dt_disable_missing_devs("i2c", "i2c@", 16, 0)) /* T6050 (J714c) has nine i2c nodes */
         return -1;
     if (dt_disable_missing_j700_touch_id())
         return -1;
@@ -6761,7 +6843,16 @@ int kboot_boot(void *kernel)
         if (dt_remain < SZ_16K)
             printf("FDT: free dt buffer space low, %u bytes left\n", dt_remain);
     }
-    ret = chip_id == T8142 ? dapf_init_fdt(dt) : dapf_init_all();
+    if (chip_id == T8142) {
+        ret = dapf_init_fdt(dt);
+    } else if (chip_id == T6050) {
+        /* Only the MTP filter, reg 1 of dart-mtp; the AOP entry of the table points at the block
+         * shared by every DART and faults. */
+        ret = dapf_init("/arm-io/dart-mtp", 1);
+        printf("kboot: MTP DAPF %s on T6050\n", ret < 0 ? "failed" : "programmed");
+    } else {
+        ret = dapf_init_all();
+    }
     if (ret < 0 && chip_id == T8140) {
         printf("kboot: refusing T8140 handoff after DAPF failure\n");
         pcie_shutdown();

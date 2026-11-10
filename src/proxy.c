@@ -107,7 +107,13 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             break;
         case P_VECTOR:
             // forcefully restore tps6598x IRQs
-            usb_hpm_restore_irqs(1);
+            /*
+             * T6050: keep the PD controllers masked across the handoff; with
+             * their interrupts back they renegotiate the ports and the USB 2.0
+             * host set up for the next stage loses its device (J714c).
+             */
+            if (chip_id != T6050)
+                usb_hpm_restore_irqs(1);
             iodev_console_flush();
             next_stage.entry = (generic_func *)request->args[0];
             memcpy(next_stage.args, &request->args[1], 5 * sizeof(u64));

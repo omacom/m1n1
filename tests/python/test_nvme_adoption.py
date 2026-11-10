@@ -33,6 +33,7 @@ typedef int sart_dev_t;
 #define USEC_PER_SEC 1000000
 #define ADT_GETPROP(...) (-1)
 #define T8140 0x8140
+#define T6050 0x6050
 static u32 chip_id = T8140;
 static void *adt;
 ''' + declarations + r'''

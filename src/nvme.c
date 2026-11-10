@@ -133,6 +133,9 @@ static bool nvme_initialized = false;
 static bool nvme_reboot_required;
 bool nvme_adopt_live_session = false;
 bool nvme_keep_running_for_linux = false;
+bool nvme_t6050_stop_coproc =
+    false; /* T6050: stop the coprocessor at shutdown (it does not restart) */
+static bool nvme_stop_requested;
 static u8 nvme_die;
 
 static asc_dev_t *nvme_asc = NULL;
@@ -412,6 +415,10 @@ bool nvme_init(void)
         if (chip_id == T8140 && nvmmu_base == 0x38dcc0000 &&
             nvme_base == 0x3cdcc0000 && nvme_size == 0x10000)
             nvme_size = 0x30000;
+        /* The J714c (T6050) ADT has the same 64 KiB alias; same registers above it. */
+        if (chip_id == T6050 && nvmmu_base == 0x41dcc0000 && nvme_base == 0x45dcc0000 &&
+            nvme_size == 0x10000)
+            nvme_size = 0x30000;
         if (nvmmu_size < NVMMU_TCB_STAT + sizeof(u32) ||
             nvme_size < NVME_DB_LINEAR_IOSQ + sizeof(u32) || nvmmu_base > UINT64_MAX - nvmmu_size ||
             nvme_base > UINT64_MAX - nvme_size ||
@@ -666,7 +673,7 @@ bool nvme_shutdown(void)
     if (nvme_type == NVME_T8132 && (adminq.failed || ioq.failed))
         goto out_preserve;
 
-    if (nvme_type == NVME_T8132 && nvme_keep_running_for_linux) {
+    if (nvme_type == NVME_T8132 && nvme_keep_running_for_linux && !nvme_stop_requested) {
         u32 cc = read32(nvme_base + NVME_CC);
         u32 csts = read32(nvme_base + NVME_CSTS);
         u32 boot_status = read32(nvme_base + NVME_BOOT_STATUS);
@@ -713,9 +720,30 @@ bool nvme_shutdown(void)
             goto out_preserve;
     }
 
+    if (nvme_type == NVME_T8132 && chip_id == T6050 && nvme_t6050_stop_coproc) {
+        /*
+         * T6050: stop the coprocessor cleanly and leave its firmware resident.
+         * Linux sets RUN again and runs a fresh RTKit boot. No PMGR reset here.
+         */
+        write64_lo_hi(nvme_base + NVME_IOQ_CMDS, 0);
+        write64_lo_hi(nvme_base + NVME_IOQ_CQES, 0);
+        rtkit_sleep(nvme_rtkit);
+        rtkit_free(nvme_rtkit);
+        sart_free(nvme_sart);
+        asc_free(nvme_asc);
+        free_queue(&ioq);
+        free_queue(&adminq);
+        nvme_initialized = false;
+        printf("nvme: shutdown done, coprocessor stopped\n");
+        return true;
+    }
+
     if (nvme_type == NVME_T8132) {
         write64_lo_hi(nvme_base + NVME_IOQ_CMDS, 0);
         write64_lo_hi(nvme_base + NVME_IOQ_CQES, 0);
+    }
+    /* nvme_stop() goes on below and stops ANS as on M1-M3 */
+    if (nvme_type == NVME_T8132 && !nvme_stop_requested) {
         nvme_adopt_live_session = true;
         nvme_initialized = false;
         printf("nvme: controller disabled; preserving live RTKit session\n");
@@ -742,6 +770,20 @@ out_preserve:
     nvme_adopt_live_session = false;
     printf("nvme: unsafe post-M4 queue handoff; retaining DMA resources until reboot\n");
     return false;
+}
+
+/*
+ * Stop ANS completely, on M4 and later too, where nvme_shutdown() leaves the RTKit session and its
+ * buffers live for a later stage to adopt. For a caller that booted a stopped ANS itself and hands
+ * it to an OS that boots it again: nothing of this session outlives the call, so no firmware-owned
+ * buffer is left in what the OS sees as free RAM.
+ */
+bool nvme_stop(void)
+{
+    nvme_stop_requested = true;
+    bool ret = nvme_shutdown();
+    nvme_stop_requested = false;
+    return ret;
 }
 
 bool nvme_flush(u32 nsid)

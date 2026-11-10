@@ -29,6 +29,7 @@ typedef uint64_t u64; typedef uint32_t u32;
 #define MAX_CPUS 4
 #define T8140 0x8140
 #define T8142 0x8142
+#define T6050 0x6050
 #define SZ_16K 16384
 #define sysop(op) ((void)0)
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
@@ -37,6 +38,7 @@ static struct spin_table spin_table[MAX_CPUS];
 static struct { void *entry; u64 args[5]; bool restore_logo; } next_stage;
 static void *dt = (void *)0x1000;
 static int dt_bufsize = 0x10000;
+static u64 retained_heap_end; /* kboot.c's retained-heap state (#30) */
 static int chip_id, mode, hardware_calls;
 static jmp_buf refused;
 static _Noreturn void panic(const char *format, ...) { longjmp(refused, 1); }
@@ -50,6 +52,7 @@ static int fdt_pack(void *p) { return 0; }
 static u32 fdt_totalsize(void *p) { return 0x8000; }
 static int dapf_init_fdt(void *p) { return 0; }
 static int dapf_init_all(void) { return 0; }
+static int dapf_init(const char *path, int index) { return 0; }
 static void pcie_shutdown(void) {}
 static void smp_set_wfe_mode(bool value) {}
 static int dt_t8140_recheck_display(void)

@@ -187,8 +187,14 @@ struct entry {
 
 struct entry dapf_entries[] = {
     /* Keep dart-ane out: its Linux driver owns that DAPF on T8140. */
-    {"/arm-io/dart-aop", 1, "aop"}, {"/arm-io/dart-mtp", 1, "mtp"},  {"/arm-io/dart-pmp", 1, "pmp"},
-    {"/arm-io/dart-isp", 5, "isp"}, {"/arm-io/dart-isp0", 5, "isp"}, {NULL, -1, NULL},
+    {"/arm-io/dart-aop", 1, "aop"},
+    {"/arm-io/dart-mtp", 1, "mtp"},
+    {"/arm-io/dart-pmp", 1, "pmp"},
+    /* T6050: the PMP's DART is dart-pmp0 (dart,t8110; DAPF aperture reg[1], live-verified). */
+    {"/arm-io/dart-pmp0", 1, "pmp0"},
+    {"/arm-io/dart-isp", 5, "isp"},
+    {"/arm-io/dart-isp0", 5, "isp"},
+    {NULL, -1, NULL},
 };
 
 int dapf_init_fdt(const void *fdt)
