@@ -425,6 +425,56 @@ static void stock_unlocked_view(void)
     dart_shutdown(dart);
     assert(!live_objects);
 }
+/* T600x: the same locked view through a DART_T6000 node, whose PTEs carry a
+ * wider offset field. Reported on J375c (T6001), linux-aurora #379. */
+static u64 table6(unsigned int page) { return FIELD_PREP(DART_T6000_PTE_OFFSET, PAGE(page) >> DART_PTE_OFFSET_SHIFT) | DART_PTE_VALID; }
+static u64 leaf6(unsigned int page) { return FIELD_PREP(DART_T6000_PTE_OFFSET, PAGE(page) >> DART_PTE_OFFSET_SHIFT) | dart_t6000.pte_flags; }
+static void t600x_locked_view(u32 chip)
+{
+    locked_view();
+    chip_id = chip;
+    nodes[DART_NODE].compat = "dart,t6000";
+    for (int i = 0; i < 4; i++)
+        at(ROOT + i)[5] = table6(L2 + i);
+}
+static void admit_t600x_locked_translating(void)
+{
+    static const u32 chips[3] = {T6000, T6001, T6002};
+    for (int c = 0; c < 3; c++) {
+        t600x_locked_view(chips[c]);
+        dart_dev_t *dart = open_view();
+        for (int i = 0; i < 4; i++)
+            assert(dart->l1[i] == at(ROOT + i));
+        /* As on T8103: one invalidation of this stream and no protected write. */
+        assert(tlbis == 1 && nwrites == 2 && !protected_writes() && !heap_used);
+        assert(writes[0].addr == REGS + DART_T8020_STREAM_SELECT && writes[0].value == BIT(SID));
+        assert(writes[1].addr == REGS + DART_T8020_STREAM_COMMAND);
+        /* An RTKit buffer grant: a mapping into an existing L2 of a borrowed root. */
+        assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == 0);
+        assert(at(L2)[7] == leaf6(DATA) && !protected_writes() && !heap_used);
+        dart_shutdown(dart);
+        assert(!live_objects);
+    }
+}
+static void t600x_refuses_untranslated_stream(void)
+{
+    reset(true, 0xf, DART_T8020_TCR_BYPASS_DART, true);
+    chip_id = T6001;
+    nodes[DART_NODE].compat = "dart,t6000";
+    assert(!dart_init_adt_display(DCP_PATH, 0, SID));
+    assert(!live_objects);
+}
+static void t600x_other_type_unchanged(void)
+{
+    /* A T600x chip with a DART_T8020 node is not this view: generic and immutable. */
+    locked_view();
+    chip_id = T6001;
+    dart_dev_t *dart = dart_init_adt_display(DCP_PATH, 0, SID);
+    assert(dart && !tlbis && !nwrites);
+    assert_immutable(dart);
+    dart_shutdown(dart);
+    assert(!live_objects);
+}
 static void other_chip_unchanged(void)
 {
     /* Any other chip gets the generic keep-PTs handle: no invalidation, immutable. */
@@ -682,6 +732,9 @@ static const struct { const char *name; void (*run)(void); } cases[] = {
     {"refuse-disabled-stream", refuse_disabled_stream},
     {"refuse-untranslated-stream", refuse_untranslated_stream},
     {"stock-unlocked-view", stock_unlocked_view},
+    {"admit-t600x-locked-translating", admit_t600x_locked_translating},
+    {"t600x-refuses-untranslated-stream", t600x_refuses_untranslated_stream},
+    {"t600x-other-type-unchanged", t600x_other_type_unchanged},
     {"other-chip-unchanged", other_chip_unchanged},
     {"gen3-unchanged", gen3_unchanged},
     {"disp-path-generic", disp_path_generic},
@@ -741,7 +794,8 @@ PRELUDE = r'''
 
 CASES = (
     "admit-locked-translating", "refuse-device-range", "refuse-disabled-stream",
-    "refuse-untranslated-stream", "stock-unlocked-view", "other-chip-unchanged",
+    "refuse-untranslated-stream", "stock-unlocked-view", "admit-t600x-locked-translating",
+    "t600x-refuses-untranslated-stream", "t600x-other-type-unchanged", "other-chip-unchanged",
     "gen3-unchanged", "disp-path-generic", "generic-locked-immutable", "fdt-locked-immutable",
     "map-selected-root", "unmap-selected-root", "unmap-absent-allocates-nothing",
     "map-absent-root-refused", "map-new-l2-in-present-root", "map-conflict-rolls-back",
