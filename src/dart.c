@@ -469,17 +469,60 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
  * stream: T8103 (DART_T8020) and the T600x family (DART_T6000, same register
  * layout). Without the mutable view below, RTKit cannot be granted its boot
  * buffers there and the DCP is left waiting mid-handshake (linux-aurora #379,
- * seen on J375c). dart_reserve_legacy_tables() repeats this chip list. */
+ * seen on J375c). dart_reserve_legacy_tables() repeats this chip list.
+ *
+ * The desktop T602x parts (M2 Pro/Max/Ultra) drive HDMI from dcpext0 (dcpext4
+ * on the Ultra), behind a DART_T8110 that iBoot leaves locked in the same way
+ * (seen on J475c: "rtkit(dcp): failed to DART map (size 0x4000)"). */
+static bool dart_legacy_display_t602x(void)
+{
+    return chip_id == T6020 || chip_id == T6021 || chip_id == T6022;
+}
+
 static bool dart_legacy_display_chip(void)
 {
-    return chip_id == T8103 || chip_id == T6000 || chip_id == T6001 || chip_id == T6002;
+    return chip_id == T8103 || chip_id == T6000 || chip_id == T6001 || chip_id == T6002 ||
+           dart_legacy_display_t602x();
 }
 
 static bool dart_legacy_display_type(const dart_dev_t *dart)
 {
     if (chip_id == T8103)
         return dart->type == DART_T8020;
+    if (dart_legacy_display_t602x())
+        return dart->type == DART_T8110;
     return dart->type == DART_T6000;
+}
+
+static bool dart_legacy_display_path(const char *path)
+{
+    if (dart_legacy_display_t602x())
+        return !strcmp(path, "/arm-io/dart-dcpext0") || !strcmp(path, "/arm-io/dart-dcpext4");
+    return !strcmp(path, "/arm-io/dart-dcp");
+}
+
+/* Only adopt a stream iBoot left enabled and translating through a root it
+ * already published; a locked DART cannot be given a new one. */
+static bool dart_legacy_display_translating(const dart_dev_t *dart)
+{
+    u32 tcr = read32(DART_TCR(dart));
+
+    if (dart->type == DART_T8110) {
+        u32 mode = DART_T8110_TCR_TRANSLATE_ENABLE | DART_T8110_TCR_BYPASS_DART |
+                   DART_T8110_TCR_BYPASS_DAPF;
+        u32 enabled = read32(dart->regs + DART_T8110_ENABLE_STREAMS + 4 * (dart->device >> 5));
+        bool ok = (enabled & BIT(dart->device & 0x1f)) &&
+                  (tcr & mode) == DART_T8110_TCR_TRANSLATE_ENABLE && dart->l1[0];
+        if (!ok)
+            printf("dart: t8110 display stream %d: tcr 0x%x enabled 0x%x l1 %p\n", dart->device,
+                   tcr, enabled, dart->l1[0]);
+        return ok;
+    }
+
+    u32 mode =
+        DART_T8020_TCR_TRANSLATE_ENABLE | DART_T8020_TCR_BYPASS_DART | DART_T8020_TCR_BYPASS_DAPF;
+    return (read32(dart->regs + DART_T8020_ENABLED_STREAMS) & BIT(dart->device)) &&
+           (tcr & mode) == DART_T8020_TCR_TRANSLATE_ENABLE;
 }
 
 /* Legacy display firmware uses existing RAM tables even when configuration is
@@ -487,20 +530,17 @@ static bool dart_legacy_display_type(const dart_dev_t *dart)
  * not available through the FDT inspection or proxy constructors. */
 dart_dev_t *dart_init_adt_display(const char *path, int instance, int device)
 {
-    if (dart_legacy_display_chip() && (device < 0 || device >= 32))
+    int max_sid = dart_legacy_display_t602x() ? 256 : 32;
+    if (dart_legacy_display_chip() && (device < 0 || device >= max_sid))
         return NULL;
 
     dart_dev_t *dart = dart_init_adt(path, instance, device, true);
     if (!dart || !dart_legacy_display_chip() || !dart_legacy_display_type(dart) ||
-        strcmp(path, "/arm-io/dart-dcp"))
+        !dart_legacy_display_path(path))
         return dart;
 
     if (dart->locked) {
-        u32 tcr = read32(DART_TCR(dart));
-        u32 mode = DART_T8020_TCR_TRANSLATE_ENABLE | DART_T8020_TCR_BYPASS_DART |
-                   DART_T8020_TCR_BYPASS_DAPF;
-        if (!(read32(dart->regs + DART_T8020_ENABLED_STREAMS) & BIT(dart->device)) ||
-            (tcr & mode) != DART_T8020_TCR_TRANSLATE_ENABLE) {
+        if (!dart_legacy_display_translating(dart)) {
             printf("dart: legacy display stream is not translating\n");
             dart_shutdown(dart);
             return NULL;
@@ -1140,7 +1180,8 @@ void dart_shutdown(dart_dev_t *dart)
  * after its handle has gone away, including when initialization is retried. */
 int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size)
 {
-    if ((chip_id != T8103 && chip_id != T6000 && chip_id != T6001 && chip_id != T6002) ||
+    if ((chip_id != T8103 && chip_id != T6000 && chip_id != T6001 && chip_id != T6002 &&
+         chip_id != T6020 && chip_id != T6021 && chip_id != T6022) ||
         !legacy_l2_count)
         return 0;
     if (!dt || legacy_l2_count > LEGACY_L2_MAX_PAGES || dram_size < SZ_16K ||

@@ -475,6 +475,92 @@ static void t600x_other_type_unchanged(void)
     dart_shutdown(dart);
     assert(!live_objects);
 }
+/* T602x: desktop HDMI goes through dcpext0 (dcpext4 on the Ultra) behind a
+ * DART_T8110 that iBoot leaves locked. Reported on J475c (T6021), #379. */
+#define DCPEXT0_PATH "/arm-io/dart-dcpext0"
+#define DCPEXT4_PATH "/arm-io/dart-dcpext4"
+static u64 leaf8110(unsigned int page) { return FIELD_PREP(DART_T6000_PTE_OFFSET, PAGE(page) >> DART_PTE_OFFSET_SHIFT) | dart_t8110.pte_flags; }
+static void t602x_view(u32 chip, const char *path, u32 tcr, bool enabled, bool root)
+{
+    reset(false, 0, 0, false);
+    chip_id = chip;
+    nodes[DART_NODE].path = path;
+    nodes[DART_NODE].compat = "dart,t8110";
+    *reg(REGS + DART_T8110_PROTECT) = DART_T8110_PROTECT_TTBR_TCR;
+    *reg(REGS + DART_T8110_TCR_OFF + 4 * SID) = tcr;
+    *reg(REGS + DART_T8110_ENABLE_STREAMS) = enabled ? BIT(SID) : 0;
+    if (root) {
+        *reg(REGS + DART_T8110_TTBR_OFF + 4 * SID) =
+            DART_T8110_TTBR_VALID | FIELD_PREP(DART_T8110_TTBR_ADDR, PAGE(ROOT) >> DART_T8110_TTBR_SHIFT);
+        at(ROOT)[5] = table6(L2);
+    }
+}
+static void t602x_done(void) { nodes[DART_NODE].path = DCP_PATH; }
+static unsigned int t8110_protected_writes(void)
+{
+    unsigned int count = 0;
+    for (unsigned int i = 0; i < nwrites; i++) {
+        u64 a = writes[i].addr;
+        count += a == REGS + DART_T8110_PROTECT || a == REGS + DART_T8110_ENABLE_STREAMS ||
+                 a == REGS + DART_T8110_TCR_OFF + 4 * SID || a == REGS + DART_T8110_TTBR_OFF + 4 * SID;
+    }
+    return count;
+}
+static void admit_t602x_locked_translating(void)
+{
+    static const u32 chips[3] = {T6020, T6021, T6022};
+    static const char *paths[2] = {DCPEXT0_PATH, DCPEXT4_PATH};
+    for (int c = 0; c < 3; c++) {
+        for (int p = 0; p < 2; p++) {
+            t602x_view(chips[c], paths[p], DART_T8110_TCR_TRANSLATE_ENABLE, true, true);
+            dart_dev_t *dart = dart_init_adt_display(paths[p], 0, SID);
+            assert(dart && dart->type == DART_T8110 && dart->locked);
+            assert(dart->l1[0] == at(ROOT));
+            /* One TLB command for this stream; no protected register is written. */
+            assert(tlbis == 1 && nwrites == 1 && !t8110_protected_writes() && !heap_used);
+            /* An RTKit buffer grant into an existing L2 of the borrowed root. */
+            assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == 0);
+            assert(at(L2)[7] == leaf8110(DATA) && !t8110_protected_writes() && !heap_used);
+            /* A grant needing a new L2 takes a recorded heap page in the same root. */
+            assert(dart_map(dart, iova(0, 9, 3), (void *)PAGE(DATA + 1), SZ_16K) == 0);
+            assert(heap_used == 1 && legacy_l2_count == 1 && legacy_l2_pages[0] == PAGE(HEAP));
+            assert(at(ROOT)[9] == table6(HEAP) && !t8110_protected_writes());
+            dart_unmap(dart, iova(0, 5, 7), SZ_16K);
+            assert(!at(L2)[7]);
+            dart_shutdown(dart);
+            assert(!live_objects);
+            t602x_done();
+        }
+    }
+}
+static void t602x_refuses_unusable_stream(void)
+{
+    /* Bypassed, disabled, or without an inherited root: refused, nothing written. */
+    t602x_view(T6021, DCPEXT0_PATH, DART_T8110_TCR_BYPASS_DART, true, true);
+    assert(!dart_init_adt_display(DCPEXT0_PATH, 0, SID) && !t8110_protected_writes());
+    t602x_view(T6021, DCPEXT0_PATH, DART_T8110_TCR_TRANSLATE_ENABLE, false, true);
+    assert(!dart_init_adt_display(DCPEXT0_PATH, 0, SID) && !t8110_protected_writes());
+    t602x_view(T6021, DCPEXT0_PATH, DART_T8110_TCR_TRANSLATE_ENABLE, true, false);
+    assert(!dart_init_adt_display(DCPEXT0_PATH, 0, SID) && !t8110_protected_writes());
+    assert(!live_objects);
+    t602x_done();
+}
+static void t602x_other_paths_unchanged(void)
+{
+    /* The internal-style dart-dcp path, or another chip, keeps the immutable handle. */
+    t602x_view(T6021, DCP_PATH, DART_T8110_TCR_TRANSLATE_ENABLE, true, true);
+    dart_dev_t *dart = dart_init_adt_display(DCP_PATH, 0, SID);
+    assert(dart && dart->locked && !tlbis && !nwrites);
+    assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == -1 && !nwrites);
+    dart_shutdown(dart);
+    t602x_view(T6001, DCPEXT0_PATH, DART_T8110_TCR_TRANSLATE_ENABLE, true, true);
+    dart = dart_init_adt_display(DCPEXT0_PATH, 0, SID);
+    assert(dart && dart->locked && !tlbis && !nwrites);
+    assert(dart_map(dart, iova(0, 5, 7), (void *)PAGE(DATA), SZ_16K) == -1 && !nwrites);
+    dart_shutdown(dart);
+    assert(!live_objects);
+    t602x_done();
+}
 static void other_chip_unchanged(void)
 {
     /* Any other chip gets the generic keep-PTs handle: no invalidation, immutable. */
@@ -735,6 +821,9 @@ static const struct { const char *name; void (*run)(void); } cases[] = {
     {"admit-t600x-locked-translating", admit_t600x_locked_translating},
     {"t600x-refuses-untranslated-stream", t600x_refuses_untranslated_stream},
     {"t600x-other-type-unchanged", t600x_other_type_unchanged},
+    {"admit-t602x-locked-translating", admit_t602x_locked_translating},
+    {"t602x-refuses-unusable-stream", t602x_refuses_unusable_stream},
+    {"t602x-other-paths-unchanged", t602x_other_paths_unchanged},
     {"other-chip-unchanged", other_chip_unchanged},
     {"gen3-unchanged", gen3_unchanged},
     {"disp-path-generic", disp_path_generic},
@@ -795,7 +884,8 @@ PRELUDE = r'''
 CASES = (
     "admit-locked-translating", "refuse-device-range", "refuse-disabled-stream",
     "refuse-untranslated-stream", "stock-unlocked-view", "admit-t600x-locked-translating",
-    "t600x-refuses-untranslated-stream", "t600x-other-type-unchanged", "other-chip-unchanged",
+    "t600x-refuses-untranslated-stream", "t600x-other-type-unchanged", "admit-t602x-locked-translating",
+    "t602x-refuses-unusable-stream", "t602x-other-paths-unchanged", "other-chip-unchanged",
     "gen3-unchanged", "disp-path-generic", "generic-locked-immutable", "fdt-locked-immutable",
     "map-selected-root", "unmap-selected-root", "unmap-absent-allocates-nothing",
     "map-absent-root-refused", "map-new-l2-in-present-root", "map-conflict-rolls-back",
