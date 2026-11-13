@@ -479,7 +479,8 @@ static bool dart_legacy_display_t602x(void)
     return chip_id == T6020 || chip_id == T6021 || chip_id == T6022;
 }
 
-static bool dart_legacy_display_chip(void)
+/* Also used by kboot_prepare_dt() to keep a previous stage's tables reserved. */
+bool dart_legacy_display_chip(void)
 {
     return chip_id == T8103 || chip_id == T6000 || chip_id == T6001 || chip_id == T6002 ||
            dart_legacy_display_t602x();

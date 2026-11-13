@@ -6508,20 +6508,22 @@ int kboot_prepare_dt(void *fdt)
         bail("FDT: couldn't reserve legacy DCP translation tables\n");
 
     u64 image_end = (u64)_end;
-    if (chip_id == T8103) {
+    if (dart_legacy_display_chip()) {
         /* chainload_image carries the previous stage's live heap in this
          * high-water mark. Its retained DCP tables no longer have a local
          * record, so keep the inherited prefix as well as our own image.
-         * This excludes allocations made by the current stage. */
+         * This excludes allocations made by the current stage. Covers every
+         * chip whose locked display DART m1n1 publishes L2 tables into
+         * (T8103, T600x, T602x); see dart_init_adt_display(). */
         u64 inherited = cur_boot_args.top_of_kernel_data;
         if (!cur_boot_args.mem_size ||
             cur_boot_args.phys_base > UINT64_MAX - cur_boot_args.mem_size)
-            bail("FDT: invalid T8103 inherited RAM extent\n");
+            bail("FDT: invalid inherited RAM extent\n");
         u64 ram_end = cur_boot_args.phys_base + cur_boot_args.mem_size;
         image_end = max(image_end, inherited);
         if ((u64)_base < cur_boot_args.phys_base || inherited < (u64)_base ||
             image_end < (u64)_base || image_end > ram_end)
-            bail("FDT: invalid T8103 inherited memory extent\n");
+            bail("FDT: invalid inherited memory extent\n");
     }
     if (chip_id == T8140) {
         u64 ram_end, inherited = cur_boot_args.top_of_kernel_data;

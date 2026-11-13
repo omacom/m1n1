@@ -2,7 +2,8 @@
 """Reserve prior-stage tables after the chainload-local record has gone away.
 
 The tested block and final reservation call are extracted from kboot_prepare_dt.
-Real in-tree libfdt validates the outgoing reservation. Boot arguments and image
+Real in-tree libfdt validates the outgoing reservation. The chip gate is the real
+dart_legacy_display_chip() from src/dart.c (T8103, T600x, T602x). Boot arguments and image
 addresses are simulated; no actual chainload, firmware, or DMA is exercised.
 """
 from pathlib import Path
@@ -25,6 +26,12 @@ def test_inherited_reservation(tmp_path):
         r"        bail\([^\n]+\);", text[end:]
     )
     assert call, "missing real m1n1 image reservation"
+    dart = (SOURCE / "src/dart.c").read_text()
+    m = re.search(r"\nbool dart_legacy_display_chip\(void\)\n\{.*?\n\}\n", dart, re.S)
+    assert m, "missing real dart_legacy_display_chip"
+    t602x = re.search(r"\nstatic bool dart_legacy_display_t602x\(void\)\n\{.*?\n\}\n", dart, re.S)
+    assert t602x, "missing real dart_legacy_display_t602x"
+    legacy_chip = t602x.group(0) + m.group(0)
     code = tmp_path / "inherited.c"
     code.write_text(r'''
 #include <assert.h>
@@ -35,10 +42,18 @@ def test_inherited_reservation(tmp_path):
 typedef uint64_t u64;
 #define T8103 0x8103
 #define T8112 0x8112
+#define T6000 0x6000
+#define T6001 0x6001
+#define T6002 0x6002
+#define T6020 0x6020
+#define T6021 0x6021
+#define T6022 0x6022
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define bail(...) do { printf(__VA_ARGS__); return -1; } while (0)
 static struct { u64 phys_base, mem_size, top_of_kernel_data; } cur_boot_args;
 static unsigned chip_id;
+#include <stdbool.h>
+''' + legacy_chip + r'''
 static u64 image_base, image_end_address;
 #define _base ((void *)(uintptr_t)image_base)
 #define _end ((void *)(uintptr_t)image_end_address)
@@ -110,7 +125,19 @@ int main(void)
     range(image_end_address);
     reset(); chip_id = T8112; cur_boot_args.top_of_kernel_data = image_base - 1;
     range(image_end_address);
-    puts("PASS inherited reservation 12 cases");
+    /* T600x and T602x publish L2 tables into their locked display DART the
+     * same way (m1n1 #46 / #48), so a chainloaded stage must keep the
+     * inherited prefix for them too, with the same bounds checks. */
+    static const unsigned legacy[] = { T6000, T6001, T6002, T6020, T6021, T6022 };
+    for (unsigned i = 0; i < sizeof(legacy) / sizeof(legacy[0]); i++) {
+        reset(); chip_id = legacy[i];
+        range(cur_boot_args.top_of_kernel_data);
+        assert(!fdt_get_mem_rsv(tree, 0, &address, &size));
+        assert(previous_table >= address && previous_table + 0x4000 <= address + size);
+        reset(); chip_id = legacy[i]; cur_boot_args.top_of_kernel_data = image_base - 1;
+        refused();
+    }
+    puts("PASS inherited reservation 24 cases");
     return 0;
 }
 ''')
@@ -128,4 +155,4 @@ int main(void)
     assert compiled.returncode == 0, compiled.stdout + compiled.stderr
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "PASS inherited reservation 12 cases" in result.stdout
+    assert "PASS inherited reservation 24 cases" in result.stdout
