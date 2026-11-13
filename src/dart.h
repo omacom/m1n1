@@ -39,6 +39,7 @@ u64 dart_find_iova(dart_dev_t *dart, s64 start, size_t len);
 u64 dart_search_range(dart_dev_t *dart, u64 paddr, size_t len);
 void dart_shutdown(dart_dev_t *dart);
 int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size);
+bool dart_legacy_display_chip(void);
 u64 dart_vm_base(dart_dev_t *dart);
 
 #endif
