@@ -9576,15 +9576,12 @@ static int dt_t6050_isp_transaction(void)
 }
 
 /*
- * The camera is optional. Without a valid ADT firmware description, or if its firmware or heap
- * reservation fails, disable the ISP and boot on without it instead of failing the whole handoff.
+ * The M4 Pro MacBooks, the 14-inch J614s and the 16-inch J616s, which share
+ * t604x-j614-j616.dtsi. The J614s ISP handoff fills that tree's ISP description from this boot's
+ * ADT (iBoot moves the firmware segments with the boot firmware, so the tree's static addresses
+ * cannot be trusted), and both keep the warm SEP firmware around the live DCP logs.
  */
-/*
- * The M4 Pro MacBooks whose ISP description (t604x-j614-j616.dtsi) the J614s ISP handoff fills
- * from this boot's ADT: the 14-inch J614s and the 16-inch J616s. iBoot moves the firmware
- * segments with the boot firmware, so the tree's static addresses cannot be trusted.
- */
-static bool t6040_isp_from_adt(void)
+static bool t6040_m4pro_laptop(void)
 {
     if (chip_id != T6040)
         return false;
@@ -9595,6 +9592,10 @@ static bool t6040_isp_from_adt(void)
     return false;
 }
 
+/*
+ * The camera is optional. Without a valid ADT firmware description, or if its firmware or heap
+ * reservation fails, disable the ISP and boot on without it instead of failing the whole handoff.
+ */
 static int dt_set_isp(void)
 {
     u64 heap_phys, heap_iova, heap_size;
@@ -9603,7 +9604,7 @@ static int dt_set_isp(void)
         return dt_t6050_isp_transaction();
 
     /* J614s and J616s consume the boot firmware's segments after DAPF setup. */
-    if (t6040_isp_from_adt())
+    if (t6040_m4pro_laptop())
         return 0;
 
     /* A T8140/T8142 ISP that isp_init() did not bring up has no firmware to reserve. */
@@ -11767,9 +11768,8 @@ int kboot_prepare_dt(void *fdt)
         dt_t6031_fw_uuids(dt);
     }
 
-    if (chip_id == T6040 && board_id == 4 && adt_is_compatible(adt, 0, "J614sAP") &&
-        !fdt_node_check_compatible(dt, 0, "apple,j614s") && dt_split_j614s_sep_reservations())
-        bail("FDT: could not split J614s SEP reservations\n");
+    if (t6040_m4pro_laptop() && dt_split_j614s_sep_reservations())
+        bail("FDT: could not split M4 Pro SEP reservations\n");
 
     /* J813: train the N1 Wi-Fi/Bluetooth link, or disable its ECAM host. */
     if (j813_n1_prepare(dt))
@@ -12047,7 +12047,7 @@ int kboot_boot(void *kernel)
 
     bool j614s_aop = chip_id == T6040 && board_id == 4 && adt_is_compatible(adt, 0, "J614sAP") &&
                      !fdt_node_check_compatible(dt, 0, "apple,j614s");
-    if (j614s_aop || t6040_isp_from_adt()) {
+    if (j614s_aop || t6040_m4pro_laptop()) {
         if (fdt_open_into(dt, dt, dt_bufsize))
             return -1;
         void *aop_tree = malloc(dt_bufsize);
