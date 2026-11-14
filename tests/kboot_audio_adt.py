@@ -86,10 +86,12 @@ def adt(buses, extra=None):
                 [Node("arm-io", arm_io, [gpio_controller()] + (extra or []) + buses)])
 
 
-def dts(amps, stale=None, chosen=""):
+def dts(amps, stale=None, chosen="", compatible=None):
     """A device tree with one ti,sn012776 node per (bus, addr); stale: {(bus, addr): props}"""
     out = ["/dts-v1/;", "/ {", "\t#address-cells = <2>;", "\t#size-cells = <2>;",
            "\tchosen { %s};" % chosen]
+    if compatible:
+        out.insert(2, '\tcompatible = %s;' % ", ".join('"%s"' % c for c in compatible))
     buses = sorted({b for b, _ in amps})
     for b in buses:
         out += ["\ti2c@%x {" % (0x100000 * (b + 1)), "\t\treg = <0x0 0x%x 0x0 0x4000>;" %
@@ -173,6 +175,10 @@ def scenario(name):
              Node("i2c1", {}, [amp("audio-speaker-a", 0x41, 0x11)])]
     if name == "group":
         return adt(group), dts(three, {(1, 0x41): STALE})
+    if name == "t8122-group":
+        # An M3 (T8122) board: its sound card's idle masks stay in charge of the sense slots
+        return adt(group), dts(three, {(1, 0x41): STALE},
+                               compatible=["apple,j613", "apple,t8122", "apple,arm-platform"])
     if name == "no-dcblocker":
         g = dict(GROUP3)
         del g["amp-dcblocker-config"]
@@ -220,7 +226,7 @@ def scenario(name):
     raise SystemExit("unknown scenario %s" % name)
 
 
-SCENARIOS = ["group", "no-dcblocker", "six-amps", "short-speaker-config", "single-amp", "amp-missing-in-dt", "amp-not-unique-in-dt",
+SCENARIOS = ["group", "t8122-group", "no-dcblocker", "six-amps", "short-speaker-config", "single-amp", "amp-missing-in-dt", "amp-not-unique-in-dt",
              "dangling-phandle", "no-amps"] + list(SPEAKER_ID_SCENARIOS)
 
 
