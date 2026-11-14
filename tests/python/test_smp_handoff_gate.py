@@ -72,7 +72,8 @@ static int dapf_init_fdt(void *p) { return 0; }
 static int dapf_init_all(void) { return 0; }
 static void pcie_shutdown(void) {}
 static void smp_set_wfe_mode(bool value) {}
-/* The J614s AOP/ISP handoff is gated on the board; no modelled chip is a J614s. */
+/* The M4 Pro AOP/ISP handoff is gated on the board; no modelled chip is a J614s or J616s. */
+static bool t6040_m4pro_laptop(void) { return false; }
 static int board_id;
 static void *adt;
 static bool adt_is_compatible(void *tree, int node, const char *compatible) { return false; }

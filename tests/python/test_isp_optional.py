@@ -18,8 +18,10 @@ def test_isp_without_usable_firmware_is_disabled_and_boot_continues(tmp_path):
         start = source.index("static int " + name + "(")
         return source[start:source.index("\n}", start) + 2] + "\n"
 
+    start = source.index("static bool t6040_m4pro_laptop(void)")
+    m4pro = source[start:source.index("\n}", start) + 2] + "\n"
     start = source.index("/*\n * The camera is optional.")
-    set_isp = source[start:source.index("\n}", start) + 2] + "\n"
+    set_isp = m4pro + source[start:source.index("\n}", start) + 2] + "\n"
     header = (ROOT / "src/adt.h").read_text()
     start = header.index("struct adt_segment_ranges {")
     layout = header[start:header.index("} PACKED;", start) + len("} PACKED;")]
