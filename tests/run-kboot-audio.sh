@@ -80,6 +80,10 @@ expect() { # expect <scenario>: the amp lines that scenario must give (tree orde
         amp 40 $BOP $DCB $R0 $Z0
         amp 42 $BOP $DCB $R2 $Z2
         amp 41 $BOP $DCB $R1 $Z1 ;;
+    t8122-group) # M3: everything but the sense idle slots, which the stale copy loses too
+        amp 40 $BOP $DCB $R0 -
+        amp 42 $BOP $DCB $R2 -
+        amp 41 $BOP $DCB $R1 - ;;
     no-dcblocker) # as on the 14"/16" M1 Pro/Max, whose ADT has no DC blocker setting
         amp 40 $BOP - $R0 $Z0
         amp 42 $BOP - $R2 $Z2
