@@ -18,6 +18,11 @@
  *   speaker-config        -> apple,speaker-config        (4 bytes: operating level and slots)
  *   amp-tx-zd-config      -> apple,amp-tx-zd-config      (8 bytes: sense output idle slots)
  *
+ * On an M3 (T8122) board amp-tx-zd-config is not passed on: there each amp's row is the complement
+ * of the sound card's idle masks the board has always used, and programmed as the SDOUT slots to
+ * drive to zero it puts one woofer on the other amps' sense slots (seen on the J613 13" Air: bad
+ * IV sense, no speaker protection, silent speakers). The card's masks stay in charge there.
+ *
  * A property the group does not have (or one without a row for every amp) is
  * removed from its amps, so the kernel never sees a value that did not come from this Mac. Amps
  * are matched to the DT's ti,sn012776 nodes by I2C address, which must name exactly one node. A
@@ -190,6 +195,13 @@ static int setup_amp_group(void *dt, const void *adt, int arm_io, int group)
         u32 len = 0;
         u32 row = amp_row_props[p].row;
         const u8 *rows = adt_getprop(adt, group, amp_row_props[p].adt, &len);
+
+        if (rows && !strcmp(amp_row_props[p].adt, "amp-tx-zd-config") &&
+            !fdt_node_check_compatible(dt, 0, "apple,t8122")) {
+            printf("kboot: audio: %s: %s not passed on (T8122: card idle masks apply)\n", name,
+                   amp_row_props[p].adt);
+            rows = NULL;
+        }
 
         if (rows && len < (u32)n * row) {
             printf("kboot: audio: %s: %s has %u bytes for %d amps, not passed on\n", name,
