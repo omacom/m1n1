@@ -451,6 +451,12 @@ static bool dapf_is_j614s(void)
     return chip_id == T6040 && board_id == 4 && adt_is_compatible(adt, 0, "J614sAP");
 }
 
+/* The 16-inch M4 Pro shares the J614s ISP description and takes its ISP handoff. */
+static bool dapf_is_j616s(void)
+{
+    return chip_id == T6040 && board_id == 6 && adt_is_compatible(adt, 0, "J616sAP");
+}
+
 static bool j614s_aop_ready;
 static bool j614s_isp_ready;
 
@@ -725,7 +731,8 @@ int dapf_init_fdt(const void *fdt)
             ret = -1;
         } else if (dapf_is_j614s() && !strcmp(entry->path, "/arm-io/dart-aop")) {
             j614s_aop_ready = true;
-        } else if (dapf_is_j614s() && !strcmp(entry->path, "/arm-io/dart-isp0")) {
+        } else if ((dapf_is_j614s() || dapf_is_j616s()) &&
+                   !strcmp(entry->path, "/arm-io/dart-isp0")) {
             j614s_isp_ready = true;
         }
         entry++;

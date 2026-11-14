@@ -9579,6 +9579,22 @@ static int dt_t6050_isp_transaction(void)
  * The camera is optional. Without a valid ADT firmware description, or if its firmware or heap
  * reservation fails, disable the ISP and boot on without it instead of failing the whole handoff.
  */
+/*
+ * The M4 Pro MacBooks whose ISP description (t604x-j614-j616.dtsi) the J614s ISP handoff fills
+ * from this boot's ADT: the 14-inch J614s and the 16-inch J616s. iBoot moves the firmware
+ * segments with the boot firmware, so the tree's static addresses cannot be trusted.
+ */
+static bool t6040_isp_from_adt(void)
+{
+    if (chip_id != T6040)
+        return false;
+    if (board_id == 4 && adt_is_compatible(adt, 0, "J614sAP"))
+        return !fdt_node_check_compatible(dt, 0, "apple,j614s");
+    if (board_id == 6 && adt_is_compatible(adt, 0, "J616sAP"))
+        return !fdt_node_check_compatible(dt, 0, "apple,j616s");
+    return false;
+}
+
 static int dt_set_isp(void)
 {
     u64 heap_phys, heap_iova, heap_size;
@@ -9586,9 +9602,8 @@ static int dt_set_isp(void)
     if (chip_id == T6050)
         return dt_t6050_isp_transaction();
 
-    /* J614s consumes the boot firmware's segments after DAPF setup. */
-    if (chip_id == T6040 && board_id == 4 && adt_is_compatible(adt, 0, "J614sAP") &&
-        !fdt_node_check_compatible(dt, 0, "apple,j614s"))
+    /* J614s and J616s consume the boot firmware's segments after DAPF setup. */
+    if (t6040_isp_from_adt())
         return 0;
 
     /* A T8140/T8142 ISP that isp_init() did not bring up has no firmware to reserve. */
@@ -12030,25 +12045,29 @@ int kboot_boot(void *kernel)
         return -1;
     }
 
-    if (chip_id == T6040 && board_id == 4 && adt_is_compatible(adt, 0, "J614sAP") &&
-        !fdt_node_check_compatible(dt, 0, "apple,j614s")) {
+    bool j614s_aop = chip_id == T6040 && board_id == 4 && adt_is_compatible(adt, 0, "J614sAP") &&
+                     !fdt_node_check_compatible(dt, 0, "apple,j614s");
+    if (j614s_aop || t6040_isp_from_adt()) {
         if (fdt_open_into(dt, dt, dt_bufsize))
             return -1;
         void *aop_tree = malloc(dt_bufsize);
         if (!aop_tree)
             return -1;
-        int aop_ret = fdt_open_into(dt, aop_tree, dt_bufsize);
-        if (!aop_ret)
-            aop_ret = dt_finish_j614s_aop(aop_tree, dapf_j614s_aop_ready());
-        if (!aop_ret) {
-            memcpy(dt, aop_tree, dt_bufsize);
-        } else {
-            int aop = fdt_node_offset_by_compatible(dt, -1, "apple,t6041-aop");
-            if (aop >= 0 && fdt_setprop_string(dt, aop, "status", "disabled")) {
-                free(aop_tree);
-                return -1;
+        /* The AOP handoff is the J614s's alone; the J616s AOP needs none. */
+        if (j614s_aop) {
+            int aop_ret = fdt_open_into(dt, aop_tree, dt_bufsize);
+            if (!aop_ret)
+                aop_ret = dt_finish_j614s_aop(aop_tree, dapf_j614s_aop_ready());
+            if (!aop_ret) {
+                memcpy(dt, aop_tree, dt_bufsize);
+            } else {
+                int aop = fdt_node_offset_by_compatible(dt, -1, "apple,t6041-aop");
+                if (aop >= 0 && fdt_setprop_string(dt, aop, "status", "disabled")) {
+                    free(aop_tree);
+                    return -1;
+                }
+                printf("FDT: J614s AOP handoff failed, keeping AOP disabled\n");
             }
-            printf("FDT: J614s AOP handoff failed, keeping AOP disabled\n");
         }
         int isp_ret = fdt_open_into(dt, aop_tree, dt_bufsize);
         if (!isp_ret) {
@@ -12065,7 +12084,7 @@ int kboot_boot(void *kernel)
                 free(aop_tree);
                 return -1;
             }
-            printf("FDT: J614s ISP handoff failed, keeping ISP disabled\n");
+            printf("FDT: M4 Pro ISP handoff failed, keeping ISP disabled\n");
         }
         free(aop_tree);
         if (fdt_pack(dt))
