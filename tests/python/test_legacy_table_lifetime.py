@@ -261,6 +261,7 @@ C_RESERVE = PRE + r"""
 #define T6001 0x6001
 #define T6002 0x6002
 #define T8112 0x8112
+#define T8122 0x8122
 #define T6020 0x6020
 #define T6021 0x6021
 #define T6022 0x6022
@@ -287,9 +288,15 @@ int main(void) {
     CHECK(fdt_num_mem_rsv(big) == 0, "reserve.offchip.no_reservations");
 
     /* another chip with a legacy list on record: still a no-op */
+    chip_id = T8122; fresh(big, sizeof big); set_pages(ok4, 4);
+    CHECK(dart_reserve_legacy_tables(big, DRAM_BASE, 0x40000000UL) == 0, "reserve.t8122.returns_0");
+    CHECK(fdt_num_mem_rsv(big) == 0, "reserve.t8122.no_reservations");
+
+    /* T8112 (M2 Mac mini, dcpext behind a locked DART_T8110, linux-aurora
+     * #394) publishes through the same view, so its pages are reserved */
     chip_id = T8112; fresh(big, sizeof big); set_pages(ok4, 4);
     CHECK(dart_reserve_legacy_tables(big, DRAM_BASE, 0x40000000UL) == 0, "reserve.t8112.returns_0");
-    CHECK(fdt_num_mem_rsv(big) == 0, "reserve.t8112.no_reservations");
+    CHECK(fdt_num_mem_rsv(big) == 4, "reserve.t8112.four_reservations");
 
     /* T600x publishes through the same view, so its pages are reserved too */
     { static const u32 t600x[3] = { T6000, T6001, T6002 };

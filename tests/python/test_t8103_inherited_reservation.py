@@ -31,7 +31,9 @@ def test_inherited_reservation(tmp_path):
     assert m, "missing real dart_legacy_display_chip"
     t602x = re.search(r"\nstatic bool dart_legacy_display_t602x\(void\)\n\{.*?\n\}\n", dart, re.S)
     assert t602x, "missing real dart_legacy_display_t602x"
-    legacy_chip = t602x.group(0) + m.group(0)
+    t8110 = re.search(r"\nstatic bool dart_legacy_display_t8110\(void\)\n\{.*?\n\}\n", dart, re.S)
+    assert t8110, "missing real dart_legacy_display_t8110"
+    legacy_chip = t602x.group(0) + t8110.group(0) + m.group(0)
     code = tmp_path / "inherited.c"
     code.write_text(r'''
 #include <assert.h>
@@ -42,6 +44,7 @@ def test_inherited_reservation(tmp_path):
 typedef uint64_t u64;
 #define T8103 0x8103
 #define T8112 0x8112
+#define T8122 0x8122
 #define T6000 0x6000
 #define T6001 0x6001
 #define T6002 0x6002
@@ -121,14 +124,15 @@ int main(void)
     refused(); /* No room to add a reservation: handoff must fail. */
     /* Other chips retain the old image-only reservation and do not interpret
      * this inherited high-water mark as T8103 ownership. */
-    reset(); chip_id = T8112;
+    reset(); chip_id = T8122;
     range(image_end_address);
-    reset(); chip_id = T8112; cur_boot_args.top_of_kernel_data = image_base - 1;
+    reset(); chip_id = T8122; cur_boot_args.top_of_kernel_data = image_base - 1;
     range(image_end_address);
-    /* T600x and T602x publish L2 tables into their locked display DART the
-     * same way (m1n1 #46 / #48), so a chainloaded stage must keep the
-     * inherited prefix for them too, with the same bounds checks. */
-    static const unsigned legacy[] = { T6000, T6001, T6002, T6020, T6021, T6022 };
+    /* T600x, T602x and T8112 publish L2 tables into their locked display
+     * DART the same way (m1n1 #46 / #48, linux-aurora #394), so a chainloaded
+     * stage must keep the inherited prefix for them too, with the same bounds
+     * checks. */
+    static const unsigned legacy[] = { T6000, T6001, T6002, T6020, T6021, T6022, T8112 };
     for (unsigned i = 0; i < sizeof(legacy) / sizeof(legacy[0]); i++) {
         reset(); chip_id = legacy[i];
         range(cur_boot_args.top_of_kernel_data);

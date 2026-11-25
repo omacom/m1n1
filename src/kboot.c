@@ -6514,7 +6514,7 @@ int kboot_prepare_dt(void *fdt)
          * record, so keep the inherited prefix as well as our own image.
          * This excludes allocations made by the current stage. Covers every
          * chip whose locked display DART m1n1 publishes L2 tables into
-         * (T8103, T600x, T602x); see dart_init_adt_display(). */
+         * (T8103, T600x, T602x, T8112); see dart_init_adt_display(). */
         u64 inherited = cur_boot_args.top_of_kernel_data;
         if (!cur_boot_args.mem_size ||
             cur_boot_args.phys_base > UINT64_MAX - cur_boot_args.mem_size)

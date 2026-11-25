@@ -473,30 +473,42 @@ dart_dev_t *dart_init_adt(const char *path, int instance, int device, bool keep_
  *
  * The desktop T602x parts (M2 Pro/Max/Ultra) drive HDMI from dcpext0 (dcpext4
  * on the Ultra), behind a DART_T8110 that iBoot leaves locked in the same way
- * (seen on J475c: "rtkit(dcp): failed to DART map (size 0x4000)"). */
+ * (seen on J475c: "rtkit(dcp): failed to DART map (size 0x4000)").
+ *
+ * The M2 Mac mini (J473, T8112) drives HDMI from dcpext the same way, behind
+ * /arm-io/dart-dcpext, also a locked DART_T8110 (linux-aurora #394: the same
+ * "failed to DART map" in its stage 2 log, then RTKit -62 in Linux). */
 static bool dart_legacy_display_t602x(void)
 {
     return chip_id == T6020 || chip_id == T6021 || chip_id == T6022;
+}
+
+/* The chips above whose display DART is a DART_T8110. */
+static bool dart_legacy_display_t8110(void)
+{
+    return dart_legacy_display_t602x() || chip_id == T8112;
 }
 
 /* Also used by kboot_prepare_dt() to keep a previous stage's tables reserved. */
 bool dart_legacy_display_chip(void)
 {
     return chip_id == T8103 || chip_id == T6000 || chip_id == T6001 || chip_id == T6002 ||
-           dart_legacy_display_t602x();
+           dart_legacy_display_t8110();
 }
 
 static bool dart_legacy_display_type(const dart_dev_t *dart)
 {
     if (chip_id == T8103)
         return dart->type == DART_T8020;
-    if (dart_legacy_display_t602x())
+    if (dart_legacy_display_t8110())
         return dart->type == DART_T8110;
     return dart->type == DART_T6000;
 }
 
 static bool dart_legacy_display_path(const char *path)
 {
+    if (chip_id == T8112)
+        return !strcmp(path, "/arm-io/dart-dcpext");
     if (dart_legacy_display_t602x())
         return !strcmp(path, "/arm-io/dart-dcpext0") || !strcmp(path, "/arm-io/dart-dcpext4");
     return !strcmp(path, "/arm-io/dart-dcp");
@@ -531,7 +543,7 @@ static bool dart_legacy_display_translating(const dart_dev_t *dart)
  * not available through the FDT inspection or proxy constructors. */
 dart_dev_t *dart_init_adt_display(const char *path, int instance, int device)
 {
-    int max_sid = dart_legacy_display_t602x() ? 256 : 32;
+    int max_sid = dart_legacy_display_t8110() ? 256 : 32;
     if (dart_legacy_display_chip() && (device < 0 || device >= max_sid))
         return NULL;
 
@@ -1182,7 +1194,7 @@ void dart_shutdown(dart_dev_t *dart)
 int dart_reserve_legacy_tables(void *dt, u64 dram_base, u64 dram_size)
 {
     if ((chip_id != T8103 && chip_id != T6000 && chip_id != T6001 && chip_id != T6002 &&
-         chip_id != T6020 && chip_id != T6021 && chip_id != T6022) ||
+         chip_id != T6020 && chip_id != T6021 && chip_id != T6022 && chip_id != T8112) ||
         !legacy_l2_count)
         return 0;
     if (!dt || legacy_l2_count > LEGACY_L2_MAX_PAGES || dram_size < SZ_16K ||
