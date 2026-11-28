@@ -110,6 +110,12 @@ endif
 CFG += ESP_STAGE2
 endif
 
+# Demo-only build: renders the probe screen with made-up numbers on the M6
+# (T8152) bring-up path. Never reaches T6032 code.
+ifeq ($(PROBE_FB_DEMO),1)
+CFG += PROBE_FB_DEMO
+endif
+
 
 LDFLAGS := -EL -maarch64elf --no-undefined -X -Bsymbolic \
 	-z notext --no-apply-dynamic-relocs --orphan-handling=warn \
@@ -204,6 +210,9 @@ OBJECTS := \
 	sep.o \
 	stage1_config.o \
 	stage1_proxy.o \
+	probe_t6032.o \
+	probe_record.o \
+	sha256.o \
 	sio.o \
 	smc.o \
 	smp.o \

@@ -21,6 +21,7 @@
 #include "payload.h"
 #include "pcie.h"
 #include "pmgr.h"
+#include "probe_t6032.h"
 #include "sep.h"
 #include "smp.h"
 #include "stage1_config.h"
@@ -251,6 +252,10 @@ static void j873g_run_proxy(void)
     fb_init(false);
     fb_display_logo();
     fb_set_active(true);
+#ifdef PROBE_FB_DEMO
+    /* Demo only: the same renderer with made-up numbers, never on T6032. */
+    probe_fb_demo_run();
+#endif
 #endif
     printf("Initialization complete. Running proxy...\n");
     uartproxy_run(NULL);
@@ -289,28 +294,44 @@ void m1n1_main(void)
 #ifdef USE_DEBUG_USB
     tps6598x_enable_debugusb();
 #else
-    if (m1n1_debug_enabled())
-        tps6598x_enable_debugusb();
+    if (m1n1_debug_enabled()) {
+        /* T6032 HPM/PD access is unverified; the proxy does not need it. */
+        if (chip_id == T6032)
+            printf("Debug USB is not supported on T6032; skipping\n");
+        else
+            tps6598x_enable_debugusb();
+    }
 #endif
 #ifdef USE_FB
-    display_init();
-    // Kick DCP to sleep, so dodgy monitors which cause reconnect cycles don't cause us to lose the
-    // framebuffer.
-    display_shutdown(DCP_SLEEP_IF_EXTERNAL);
-    // On idevice we need to always clear, because otherwise it looks scuffed on white devices
-    fb_init(!is_mac);
-    fb_display_logo();
+    if (chip_id == T6032) {
+        /* T6032 has no DCP display path in m1n1; keep iBoot's framebuffer. */
+        fb_init(false);
+        fb_display_logo();
+        fb_set_active(true);
+    } else {
+        display_init();
+        // Kick DCP to sleep, so dodgy monitors which cause reconnect cycles don't cause us to lose the
+        // framebuffer.
+        display_shutdown(DCP_SLEEP_IF_EXTERNAL);
+        // On idevice we need to always clear, because otherwise it looks scuffed on white devices
+        fb_init(!is_mac);
+        fb_display_logo();
 #ifdef FB_SILENT_MODE
-    fb_set_active(!cur_boot_args.video.display);
+        fb_set_active(!cur_boot_args.video.display);
 #else
-    fb_set_active(true);
+        fb_set_active(true);
 #endif
+    }
 #endif
 
     cpufreq_fixup();
 #endif
 
     printf("Initialization complete.\n");
+
+    /* On the Studio: read, draw on the firmware framebuffer, then proxy. */
+    if (chip_id == T6032)
+        probe_t6032_run();
 
     run_actions();
 
@@ -335,8 +356,8 @@ next_stage:
 #ifndef BRINGUP
     if (chip_id != T8152) {
         usb_iodev_shutdown();
-        /* Its firmware may still use memory the next stage will reuse. */
-        if (display_shutdown(DCP_SLEEP_IF_EXTERNAL) < 0) {
+        /* T6032 never started the DCP; there is no display to hand off. */
+        if (chip_id != T6032 && display_shutdown(DCP_SLEEP_IF_EXTERNAL) < 0) {
             printf("Display handoff failed; returning to proxy\n");
             uartproxy_run(NULL);
             panic("Display handoff failed\n");
